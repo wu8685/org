@@ -1,6 +1,6 @@
 .PHONY: check-tools kind-up kind-down temporal-dev console-dev console-test docs-test backend-test sdk-temporal-test sample-test sample-image sample-kind-load parallel-sample-test parallel-sample-image parallel-sample-kind-load dynamic-sample-test dynamic-sample-image dynamic-sample-kind-load e2e-preflight e2e-local parallel-e2e-local dynamic-e2e-local e2e-clean
 
-SAMPLE_IMAGE_REPOSITORY ?= org.local/hello-worker
+SAMPLE_IMAGE_REPOSITORY ?=
 SAMPLE_VERSION ?=
 SAMPLE_COMMIT ?=
 
@@ -36,49 +36,31 @@ sdk-temporal-test:
 	@ORG_SDK_TEMPORAL_TEST=1 go test ./test/sdk_runtime -run '^TestOrgSDKWaitSurvivesWorkerRestartOnLocalTemporal$$' -count=1 -v
 
 sample-test:
-	@cd samples/hello && go test ./...
+	@$(MAKE) -C samples/hello test
 
 sample-image:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)" \
-		sh samples/hello/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)"
+	@$(MAKE) -C samples/hello image VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 sample-kind-load:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)" \
-		sh samples/hello/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)" --kind-load
+	@$(MAKE) -C samples/hello kind-load VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 parallel-sample-test:
-	@cd samples/parallel-confirmation && go test ./...
+	@$(MAKE) -C samples/parallel-confirmation test
 
 parallel-sample-image:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$${SAMPLE_IMAGE_REPOSITORY:-org.local/parallel-confirmation-worker}" \
-		sh samples/parallel-confirmation/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)"
+	@$(MAKE) -C samples/parallel-confirmation image VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 parallel-sample-kind-load:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$${SAMPLE_IMAGE_REPOSITORY:-org.local/parallel-confirmation-worker}" \
-		sh samples/parallel-confirmation/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)" --kind-load
+	@$(MAKE) -C samples/parallel-confirmation kind-load VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 dynamic-sample-test:
-	@cd samples/dynamic-decision && go test ./...
+	@$(MAKE) -C samples/dynamic-decision test
 
 dynamic-sample-image:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$${SAMPLE_IMAGE_REPOSITORY:-org.local/dynamic-decision-worker}" \
-		sh samples/dynamic-decision/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)"
+	@$(MAKE) -C samples/dynamic-decision image VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 dynamic-sample-kind-load:
-	@test -n "$(SAMPLE_VERSION)" || { echo "SAMPLE_VERSION is required" >&2; exit 2; }
-	@test -n "$(SAMPLE_COMMIT)" || { echo "SAMPLE_COMMIT is required" >&2; exit 2; }
-	@SAMPLE_IMAGE_REPOSITORY="$${SAMPLE_IMAGE_REPOSITORY:-org.local/dynamic-decision-worker}" \
-		sh samples/dynamic-decision/scripts/build-image.sh "$(SAMPLE_VERSION)" "$(SAMPLE_COMMIT)" --kind-load
+	@$(MAKE) -C samples/dynamic-decision kind-load VERSION="$(SAMPLE_VERSION)" COMMIT="$(SAMPLE_COMMIT)" $(if $(SAMPLE_IMAGE_REPOSITORY),IMAGE_REPOSITORY="$(SAMPLE_IMAGE_REPOSITORY)")
 
 e2e-preflight:
 	@sh scripts/e2e-preflight.sh

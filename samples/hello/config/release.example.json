@@ -1,0 +1,13 @@
+{
+  "version": "2026.08.1",
+  "description": "A minimal greeting Workflow with two sequential Activities.",
+  "image": "registry.example.com/team/hello-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "versionConfig": {},
+  "runtime": {"cpu": "100m", "memory": "128Mi", "environment": []},
+  "source": {
+    "repository": "https://github.com/example/hello-worker",
+    "branch": "main",
+    "commit": "000000000000",
+    "ciReference": "build-1"
+  }
+}

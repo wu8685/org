@@ -1,48 +1,72 @@
 # Parallel Confirmation Org SDK Worker
 
-> 术语遵循 [org glossary](../../docs/architecture/glossary.md)：产品隔离边界称 Tenant；底层资源称 shared platform Temporal Namespace 与 shared platform Kubernetes Namespace。
-
-这个 Sample 演示一个先等待人工确认、再动态并行、最后汇合的 Workflow：
+这个独立Worker repository演示“先等待人工确认，再并行执行两个分支，最后汇合”：
 
 ```text
-approval-gate → build-plan → execute summary ─┐
-                              execute readiness ─┴→ join → finalize
+approval-gate → build-plan → summary ───┐
+                            readiness ──┴→ join → finalize
 ```
 
-`approval-gate` 是 Workflow 内的 idle node，不是阻塞 Activity。确认前不会调度任何 Activity；确认后，`BuildPlan` 的 recorded result 产生两个稳定 branch key，Workflow 在等待任一结果之前先启动两个分支。
+> 产品术语遵循 [org glossary](https://github.com/wu8685/org/blob/main/docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
 
-## 阅读路径
+`approval-gate`是Workflow内可恢复的idle node，不是阻塞Activity。确认前projection显示`waiting-for-user`；确认后，recorded `BuildPlan` result创建两个stable-key runtime branch。
 
-- [`definition.go`](definition.go)：typed Definition、`AwaitConfirmation`、runtime fork/join。
-- [`activities.go`](activities.go)：无外部副作用的 plan、branch 与 finalize 逻辑。
+## 业务代码
 
-Sample 不 import raw Temporal SDK，不手写 Signal、projection 或 metadata。Org SDK 负责 stable runtime node/Activity ID、Pinned Workflow registration、action envelope、dynamic projection 与 canonical manifest。
+- `definition.go`：`AwaitConfirmation`、runtime fork/join与projection；
+- `activities.go`：plan、branch和finalize业务逻辑。
+
+Sample不手写Signal、projection或raw Temporal注册。人工action只通过org Gateway提交。
+
+## 测试
 
 ```sh
-cd samples/parallel-confirmation
-go test ./...
+make test
+make vet
+make verify
 ```
 
-## Projection 与受控确认
+测试证明确认前不调度Activity、两个branch在等待结果前都已启动、join只在二者完成后运行。
 
-启动后 projection 只包含 `approval-gate = waiting-for-user`，并公开 schema 化的 `confirm` action。org Gateway 校验 Tenant、`run:action:confirm` permission、input schema 与 `Idempotency-Key` 后发送受控 action；不要让终端用户直连 Temporal，也不要直接发送 Signal。
+## Build、push或kind-load
 
-确认后 projection 按实际路径增加 `build-plan`、两个 `execute-branch` runtime node、`join` 和 `finalize`。renderer 必须消费 projection 中的动态节点和 dependencies，不能假定固定节点数或坐标。
-
-## 构建并加载 kind
-
-在仓库根目录运行：
+本地build：
 
 ```sh
-make parallel-sample-kind-load \
-  SAMPLE_VERSION=2026.08.1 \
-  SAMPLE_COMMIT=$(git rev-parse --short=12 HEAD)
+make image VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-命令从仓库根构建 Sample image，并输出 immutable `IMAGE_DIGEST`。org 只接收 image digest、版本级 description、runtime resources 和 source provenance；控制面不为用户构建或发布镜像。候选 Pod 使用 Org SDK 自动注册只读 contract，用户不管理 image 内 manifest，也不在 Console 上传。
+push自己的registry：
 
-生产环境由用户 CI build/push，并从 registry push 结果保存 `image@sha256:...`。在 Console 创建 `parallel-confirmation-worker` 的 WorkerVersion 时提交该 digest；tag 只用于构建可读性，不能作为发布输入。
+```sh
+make push \
+  IMAGE_REPOSITORY=registry.example.com/team/parallel-confirmation-worker \
+  VERSION=2026.08.1 \
+  COMMIT=$(git rev-parse --short=12 HEAD)
+```
 
-kind Pod 的 `TEMPORAL_ADDRESS` 必须使用 Pod 可达地址；本地通常是 `host.docker.internal:7233`，不能硬编码 `127.0.0.1`。`TEMPORAL_TASK_QUEUE` 与 `TEMPORAL_WORKER_DEPLOYMENT` 由服务端从 Tenant + Worker name 派生。
+或加载本地`kind-org`：
 
-所有 Activity 都声明 `sideEffect: none`。真实 write Activity 必须声明 stable idempotency key，或 reconciliation/compensation policy；平台不声称外部效果 exactly once。
+```sh
+make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+```
+
+成功后复制`IMAGE_DIGEST=<repository>@sha256:...`。当前目录就是完整Docker build context；不需要org根源码或根Makefile。
+
+## 在org中运行
+
+1. 在Console创建Worker `parallel-confirmation-worker`；
+2. 用上一步digest发布Version，并等待SDK registration、poller与probe；
+3. 触发`ParallelConfirmationWorkflow`；
+4. Run detail先显示`approval-gate = waiting-for-user`和`confirm` action；
+5. 提交确认后，观察两个running branch、join与finalize依次完成。
+
+Gateway会校验Tenant、permission、input schema、projection revision与`Idempotency-Key`。终端用户不直连Temporal，也不直接发送Signal。
+
+Org SDK在Worker启动时从typed Definition生成contract并自动注册。Console不接收用户提供的contract文件。
+
+## 哪些配置由平台注入
+
+org平台注入bootstrap endpoint/token、Pod identity、Temporal连接、Task Queue、Worker Deployment和Build ID。用户不手填这些值，不创建credential文件，也不把它们写进image。
+
+用户只维护业务Definition/Activities、image与release输入。发布body示例见`config/release.example.json`。真实write Activity必须声明stable idempotency key或reconciliation/compensation policy。

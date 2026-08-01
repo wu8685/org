@@ -1,6 +1,6 @@
 # Worker bootstrap registration protocol
 
-> Terminology: this specification follows the canonical [org glossary](../architecture/glossary.md). Product identity is Tenant → Worker → WorkerVersion. Infrastructure continues to use one shared platform Temporal Namespace and one shared platform Kubernetes Namespace; a product Tenant is never mapped to either underlying Namespace.
+> Terminology: this specification follows the canonical [org glossary](../architecture/glossary.md). Product identity is Tenant → Worker → WorkerVersion. Infrastructure continues to use one shared platform Temporal Namespace and one shared platform Kubernetes Namespace; a product Tenant is never mapped to either underlying platform resource boundary.
 
 ## 状态
 

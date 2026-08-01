@@ -13,9 +13,15 @@ docs/specs/008-parallel-confirmation-org-sdk-sample.md
 docs/specs/009-dynamic-decision-org-sdk-sample.md
 docs/specs/010-workflow-execution-risk-defense.md
 docs/specs/011-console-ui-http-api.md
+docs/specs/012-worker-bootstrap-registration.md
+docs/specs/013-sample-repository-independence.md
 docs/ui-sdd-input.md
 docs/development.md
 docs/implementation-status.md
+README.md
+docs/getting-started.md
+docs/architecture/overview.md
+samples/README.md
 samples/hello/README.md
 samples/parallel-confirmation/README.md
 samples/dynamic-decision/README.md'
@@ -41,7 +47,7 @@ do
 done
 
 for file in $files; do
-	if ! grep -q 'docs/architecture/glossary.md\|architecture/glossary.md' "$file"; then
+	if ! grep -q 'glossary.md' "$file"; then
 		echo "$file: missing canonical glossary reference" >&2
 		failed=1
 	fi

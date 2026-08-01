@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -108,7 +109,7 @@ func (r *acceptanceRun) buildAndLoadParallelSample(suffix string) sampleImage {
 	r.t.Helper()
 	version := "parallel-e2e-" + r.id + "-" + suffix
 	commit := strings.Repeat("c", 12)
-	cmd := exec.CommandContext(r.ctx, "make", "-C", r.root, "parallel-sample-kind-load", "SAMPLE_VERSION="+version, "SAMPLE_COMMIT="+commit)
+	cmd := exec.CommandContext(r.ctx, "make", "-C", filepath.Join(r.root, "samples", "parallel-confirmation"), "kind-load", "VERSION="+version, "COMMIT="+commit)
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -117,7 +118,7 @@ func (r *acceptanceRun) buildAndLoadParallelSample(suffix string) sampleImage {
 	digest := parallelDigestReferencePattern.FindString(string(output))
 	tag := parallelTagPattern.FindString(string(output))
 	if digest == "" || tag == "" {
-		r.t.Fatalf("parallel-sample-kind-load did not print tag and digest reference:\n%s", output)
+		r.t.Fatalf("Parallel Confirmation Sample kind-load did not print tag and digest reference:\n%s", output)
 	}
 	image := sampleImage{version: version, tag: tag, digestReference: digest, commit: commit}
 	r.images = append(r.images, image)

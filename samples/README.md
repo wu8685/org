@@ -1,28 +1,35 @@
 # Org SDK Samples
 
-三个 Sample 展示从最小顺序 Workflow 到人工确认、动态并行和运行时路由的渐进路径。
+三个Sample是一条由浅入深的学习路径。每个目录都按独立Worker repository组织：进入目录后即可测试、构建、push或加载kind，不依赖org根Makefile。
 
-| Sample | 适合先看什么 | 运行结果 |
-|---|---|---|
-| [Hello](hello/README.md) | Definition、Activity、顺序 DAG | 两个业务步骤后返回问候语 |
-| [Parallel confirmation](parallel-confirmation/README.md) | `AwaitConfirmation`、fork/join | 用户确认后并行执行两个分支并汇合 |
-| [Dynamic decision](dynamic-decision/README.md) | Activity result 驱动 if/else | 只执行一个分支，另一分支显示 `skipped` |
+> 产品术语遵循 [org glossary](https://github.com/wu8685/org/blob/main/docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
 
-## 最小使用路径
+| 顺序 | Sample | 学习目标 | Console中可观察结果 |
+|---|---|---|---|
+| 1 | [Hello](hello/README.md) | 两个顺序Activity与最小typed Definition | `prepare → compose → completed` |
+| 2 | [Parallel confirmation](parallel-confirmation/README.md) | `waiting-for-user`、受控确认、runtime fork/join | 确认后两个并行节点同时运行并汇合 |
+| 3 | [Dynamic decision](dynamic-decision/README.md) | Activity result驱动if/else | selected分支完成，未选分支显示`skipped` |
 
-1. 修改 Sample 的 `definition.go` 与 `activities.go`，表达业务步骤、依赖、输入输出和 action。
-2. 运行对应 `make *-sample-test` 目标。
-3. 构建并推送自己的 OCI image；发布时只提交 registry 返回的不可变 `image@sha256:...`，不要提交 tag。
-4. 在 Console 创建 Worker，并以版本、description、digest、runtime config 与 source provenance 发布 WorkerVersion。
-5. 候选 Pod 启动后，Org SDK 自动从 typed Definition 构造 contract 并注册；不需要镜像内 manifest 文件，也不需要在 Console 上传或编辑 manifest。
-6. 从 Console 触发 Workflow，观察动态 DAG。人工 action 通过 Gateway 提交；路由 Sample 会显示 selected 与 `skipped` 节点。
-
-本地完整验证需要 `kind-org` 与 `127.0.0.1:7233` 的 Temporal：
+## 每个目录使用相同命令
 
 ```sh
-make e2e-local
-make parallel-e2e-local
-make dynamic-e2e-local
+cd samples/hello # 或另一个Sample目录
+make test
+make verify
+make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-不要把 Secret 写进 image、Workflow input、projection、log 或 Audit。version config 只保存 Secret reference。Workflow 不能直接执行外部 I/O；write Activity 必须使用稳定 idempotency key，或明确 reconciliation/compensation policy。
+使用自己的registry时：
+
+```sh
+make push \
+  IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
+  VERSION=2026.08.1 \
+  COMMIT=$(git rev-parse --short=12 HEAD)
+```
+
+两条image路径都输出`IMAGE_DIGEST=<repository>@sha256:...`。在org Console创建对应Worker并发布Version，候选Pod会通过Org SDK自动注册contract；用户不提供contract文件。
+
+平台注入bootstrap、Temporal连接和routing配置。Sample repository只拥有业务Definition、Activities、image构建与release输入。不要把Secret写进image、Workflow input、projection、log或Audit。
+
+完整本地环境与发布步骤见 [Getting Started](../docs/getting-started.md)。

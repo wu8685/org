@@ -3,11 +3,9 @@ module github.com/wu8685/org-sample-hello
 go 1.26
 
 require (
-	github.com/wu8685/org v0.0.0
+	github.com/wu8685/org v0.0.0-20260801101044-268e8896f5dd
 	go.temporal.io/sdk v1.47.0 // indirect
 )
-
-replace github.com/wu8685/org => ../..
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

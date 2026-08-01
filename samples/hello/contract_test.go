@@ -73,8 +73,10 @@ func TestProductionSampleSourceDoesNotImportRawTemporalSDK(t *testing.T) {
 
 func TestImageFilesStaySmallAndReadable(t *testing.T) {
 	checks := map[string][]string{
-		"Dockerfile":             {"COPY go.mod go.sum", "COPY sdk ./sdk", "COPY samples/hello", "org.opencontainers.image.version", "org.opencontainers.image.revision", "USER 65532:65532", "ENTRYPOINT"},
-		"scripts/build-image.sh": {"repo_root=", "--file", "docker build", "VERSION=", "COMMIT=", "--kind-load", "kind-load.sh"},
+		"Makefile":               {"test:", "vet:", "verify:", "image:", "push:", "kind-load:"},
+		"Dockerfile":             {"COPY go.mod go.sum", "COPY . .", "org.opencontainers.image.version", "org.opencontainers.image.revision", "USER 65532:65532", "ENTRYPOINT"},
+		"scripts/build-image.sh": {"sample_dir=", "--file", "docker build", "VERSION=", "COMMIT=", "--kind-load", "--push", `"$sample_dir"`},
+		"scripts/push-image.sh":  {"docker push", "digest:", "IMAGE_DIGEST="},
 		"scripts/kind-load.sh":   {"kind load docker-image", "images tag", "crictl inspecti", "IMAGE_DIGEST="},
 	}
 	for file, wants := range checks {

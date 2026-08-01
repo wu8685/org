@@ -2,7 +2,7 @@ module github.com/wu8685/org-sample-parallel-confirmation
 
 go 1.26
 
-require github.com/wu8685/org v0.0.0
+require github.com/wu8685/org v0.0.0-20260801101044-268e8896f5dd
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -31,5 +31,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/wu8685/org => ../..

@@ -64,6 +64,16 @@ Open `http://127.0.0.1:8090`. The sidebar contains only 总览, Workers, Workflo
 
 ## Verification
 
+每个Sample目录是用户路径的权威入口：
+
+```sh
+cd samples/hello
+make verify
+make image VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+```
+
+根级Sample target只为维护者聚合验收，并委托到对应Sample Makefile：
+
 ```sh
 make docs-test
 make backend-test
@@ -74,7 +84,7 @@ make dynamic-sample-test
 
 ## Real local end-to-end acceptance
 
-The control-plane acceptance test is opt-in because it builds images and creates real local resources. It uses the deliberately minimal `samples/hello` Worker as an external user fixture; the test itself belongs to `org` under `test/e2e`.
+The control-plane acceptance test is opt-in because it builds images and creates real local resources. It uses each independent Sample Worker repository as an external user fixture; the test itself belongs to `org` under `test/e2e`. The E2E harness invokes `make kind-load` with the Sample directory as its working root, then publishes the returned digest.
 
 ```sh
 make e2e-preflight

@@ -1,82 +1,88 @@
 # Hello Org SDK Worker
 
-> 术语遵循 [org glossary](../../docs/architecture/glossary.md)：产品隔离边界称 Tenant；底层资源称 shared platform Temporal Namespace 与 shared platform Kubernetes Namespace。
-
-这是最小的 Org SDK Worker。它只演示一条顺序执行路径：
+这是最小的Org SDK Worker repository。它用两个无外部副作用的Activity生成问候语，并把顺序执行路径投影给org：
 
 ```text
 prepare-greeting → compose-greeting → completed
 ```
 
-输入 `{"name":"Codex"}`，得到：
+> 产品术语遵循 [org glossary](https://github.com/wu8685/org/blob/main/docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
 
-```json
-{"message":"Hello, Codex!","workerVersion":"v1","idempotencyKey":"<sha256>"}
-```
+## 先看两处
 
-## 1. 只需阅读两处
+- `definition.go`：typed Definition、节点依赖与retry/timeout policy；
+- `activities.go`：业务输入校验和问候语生成。
 
-- [`definition.go`](definition.go)：用 typed Org SDK Definition 连接两个 Activity 和 terminal semantic node。
-- [`activities.go`](activities.go)：纯业务输入校验与问候语生成。
+Sample不import raw Temporal SDK，不手写projection或平台routing。Org SDK负责stable node/Activity ID、dynamic semantic projection和启动时contract registration。
 
-Sample 不 import raw Temporal SDK，不注册 Query/Signal，也不手写 projection。Org SDK 负责 stable node/Activity ID、retry options、Pinned Workflow registration、dynamic semantic projection 与 canonical manifest。
+## 测试
 
-```sh
-make sample-test
-```
-
-两个 Activity 都声明为 `sideEffect: none`。真实 write Activity 必须改为 `sideEffect: write`，并通过 Org SDK 声明和传播 stable idempotency key，或声明 reconciliation policy；这不等于外部效果 exactly once。
-
-## 2. SDK 自动注册 contract
-
-Worker 启动时调用 Org SDK hosted entrypoint。SDK 从 typed Definition 在内存中生成 canonical contract/digest，使用平台注入的短期 credential 注册；收到 `accepted` 后才开始 Temporal polling。
+从本目录运行：
 
 ```sh
-make sample-test
+make test
+make vet
+# 或一次执行
+make verify
 ```
 
-不需要把 manifest 放进 image，也不需要在 API/Console 上传。`cmd/generate-manifest` 仅保留为可选的 CI/debug 审计工具，不是发布输入。
+预期结果：输入`{"name":"Codex"}`后返回`Hello, Codex!`，projection中的三个节点均为`completed`。
 
-## 3. 构建并加载到 kind
-
-在仓库根目录运行：
+## 构建本地image
 
 ```sh
-make sample-kind-load \
-  SAMPLE_VERSION=2026.08.1 \
-  SAMPLE_COMMIT=$(git rev-parse --short=12 HEAD)
+make image \
+  VERSION=2026.08.1 \
+  COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-脚本使用仓库根作为 Docker build context，以便 Sample 引用本仓库 Org SDK；它只构建用户 Sample image，不由 org 控制面代建或发布。成功后输出：
+Docker build context只有当前repository。命令输出可读tag；发布WorkerVersion仍必须使用immutable digest。
+
+## Push到registry
+
+先用Docker完成registry login，再运行：
+
+```sh
+make push \
+  IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
+  VERSION=2026.08.1 \
+  COMMIT=$(git rev-parse --short=12 HEAD)
+```
+
+成功后输出：
 
 ```text
-IMAGE_TAG=org.local/hello-worker:2026.08.1-<commit>
-IMAGE_DIGEST=org.local/hello-worker@sha256:<digest>
+IMAGE_DIGEST=registry.example.com/team/hello-worker@sha256:<digest>
 ```
 
-注册时必须使用 `IMAGE_DIGEST`，不能使用可变 tag。本地流程不 push registry。
+脚本不保存registry credential。不要从tag文本推测digest，始终使用registry返回值。
 
-生产发布由用户自己的 CI build/push。让 CI 保存 registry 返回的 digest，并组装 `registry.example.com/team/hello@sha256:...`；Console 只接受这个不可变 reference。不要从本地 tag 文本推测 digest。
+## 本地kind
 
-## 4. 由 org 注册、启动和读取 projection
+已有`kind-org`时：
 
-WorkerVersion 注册请求包含：
+```sh
+make kind-load \
+  VERSION=2026.08.1 \
+  COMMIT=$(git rev-parse --short=12 HEAD)
+```
 
-- `workerName: hello-worker`；
-- 版本级 `description`；
-- OCI image digest；
-- version、runtime resources 与 source provenance。
+它会构建、加载image并输出`IMAGE_DIGEST=org.local/hello-worker@sha256:...`。
 
-触发语义是 `hello-worker` 下启动 `HelloWorkflow`；未指定版本时使用 Current，显式历史版本使用 Pinned override。读取 Run 时使用 SDK 的 semantic projection；不要从 Temporal Event History 推断 DAG。
+## 在org中运行
 
-kind Pod 的技术连接参数由 org 注入：
+1. 在Console创建Worker `hello-worker`；
+2. 新建Version，填写version-level description、`IMAGE_DIGEST`、`100m` CPU、`128Mi` memory和source provenance；
+3. 等待候选Worker完成SDK registration、poller与probe；
+4. 触发`HelloWorkflow`，input为`{"name":"Codex"}`；
+5. 在Run detail观察顺序DAG与最终结果。
 
-| Variable | Purpose |
-|---|---|
-| `TEMPORAL_ADDRESS` | Pod 可达的 platform Temporal endpoint；本地通常为 `host.docker.internal:7233` |
-| `TEMPORAL_NAMESPACE` | shared platform Temporal Namespace |
-| `TEMPORAL_TASK_QUEUE` | 服务端由 Tenant + Worker name 派生 |
-| `TEMPORAL_WORKER_DEPLOYMENT` | 服务端由 Tenant + Worker name 派生 |
-| `TEMPORAL_WORKER_BUILD_ID` | 本次 WorkerVersion |
+Org SDK在Worker启动时从typed Definition生成contract并自动注册。用户不管理contract artifact，Console只读展示注册结果。
 
-Temporal Web UI 仅用于高级诊断。普通用户不需要直连 Temporal，也不接触 Task Queue、Signal 或 platform credentials。
+## 哪些配置由平台注入
+
+部署时org平台注入bootstrap endpoint/token、Pod identity、Temporal连接、Task Queue、Worker Deployment和Build ID。它们不是用户填写的`.env`配置，也不得打进image或提交到Git。
+
+用户只维护业务Definition/Activities、image repository、release description、resource配置、Secret reference和source provenance。示例发布body见`config/release.example.json`。
+
+真实write Activity必须使用stable idempotency key，或声明reconciliation/compensation policy；平台不声称外部效果exactly once。

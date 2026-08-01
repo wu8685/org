@@ -66,7 +66,7 @@ func (r *acceptanceRun) buildAndLoadSample(suffix string) sampleImage {
 	r.t.Helper()
 	version := "e2e-" + r.id + "-" + suffix
 	commit := strings.Repeat(map[string]string{"a": "a", "b": "b"}[suffix], 12)
-	cmd := exec.CommandContext(r.ctx, "make", "-C", r.root, "sample-kind-load", "SAMPLE_VERSION="+version, "SAMPLE_COMMIT="+commit)
+	cmd := exec.CommandContext(r.ctx, "make", "-C", filepath.Join(r.root, "samples", "hello"), "kind-load", "VERSION="+version, "COMMIT="+commit)
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -75,7 +75,7 @@ func (r *acceptanceRun) buildAndLoadSample(suffix string) sampleImage {
 	digest := digestReferencePattern.FindString(string(output))
 	tag := tagPattern.FindString(string(output))
 	if digest == "" || tag == "" {
-		r.t.Fatalf("sample-kind-load did not print tag and digest reference:\n%s", output)
+		r.t.Fatalf("Hello Sample kind-load did not print tag and digest reference:\n%s", output)
 	}
 	image := sampleImage{version: version, tag: tag, digestReference: digest, commit: commit}
 	r.images = append(r.images, image)

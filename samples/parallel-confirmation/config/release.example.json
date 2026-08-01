@@ -1,0 +1,13 @@
+{
+  "version": "2026.08.1",
+  "description": "An approval gate followed by two parallel branches and a join.",
+  "image": "registry.example.com/team/parallel-confirmation-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "versionConfig": {},
+  "runtime": {"cpu": "100m", "memory": "128Mi", "environment": []},
+  "source": {
+    "repository": "https://github.com/example/parallel-confirmation-worker",
+    "branch": "main",
+    "commit": "000000000000",
+    "ciReference": "build-1"
+  }
+}

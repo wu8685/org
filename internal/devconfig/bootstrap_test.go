@@ -29,12 +29,12 @@ func TestKindAndTemporalBootstrapFilesMatchRuntimeDefaults(t *testing.T) {
 			t.Errorf("Makefile missing %q", want)
 		}
 	}
-	for _, want := range []string{"parallel-sample-test:", "parallel-sample-image:", "parallel-sample-kind-load:", "parallel-e2e-local:", "TestLocalParallelConfirmationAcceptance", "samples/parallel-confirmation/scripts/build-image.sh"} {
+	for _, want := range []string{"parallel-sample-test:", "parallel-sample-image:", "parallel-sample-kind-load:", "parallel-e2e-local:", "TestLocalParallelConfirmationAcceptance", "$(MAKE) -C samples/parallel-confirmation"} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("Makefile missing %q", want)
 		}
 	}
-	for _, want := range []string{"dynamic-sample-test:", "dynamic-sample-image:", "dynamic-sample-kind-load:", "dynamic-e2e-local:", "TestLocalDynamicDecisionAcceptance", "samples/dynamic-decision/scripts/build-image.sh"} {
+	for _, want := range []string{"dynamic-sample-test:", "dynamic-sample-image:", "dynamic-sample-kind-load:", "dynamic-e2e-local:", "TestLocalDynamicDecisionAcceptance", "$(MAKE) -C samples/dynamic-decision"} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("Makefile missing %q", want)
 		}
