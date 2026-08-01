@@ -41,6 +41,8 @@ button { cursor: pointer; }
 .tenant-switch { display: grid; grid-template-columns: 28px minmax(180px, 280px) auto; column-gap: 10px; align-items: center; }
 .tenant-switch label { display: grid; gap: 2px; color: var(--muted); font-size: 11px; }
 .tenant-switch select { min-height: 32px; padding: 4px 28px 4px 8px; color: var(--fg); font-weight: 650; }
+.tenant-current-identity { display: grid; gap: 2px; }
+.tenant-current-identity span { color: var(--muted); font-size: 11px; }
 .tenant-stable-id { color: var(--muted); font: 11px var(--mono); }
 .tenant-switch-status { grid-column: 2 / -1; min-height: 1em; color: var(--muted); font-size: 11px; }
 .tenant-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: var(--fg); color: white; font: 11px var(--mono); }
