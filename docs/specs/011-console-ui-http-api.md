@@ -503,6 +503,12 @@ UI状态语义：
 - 失败的 WorkerVersion identity 仍是不可变记录。修复环境后，用户以新 version 发布；Console 不暗中覆盖旧失败版本。
 - publish conflict 不得统一显示为模糊的“resource state conflict”：同名不可变 version 已存在时提示用户改用新 version；同一 `Idempotency-Key` 配不同 canonical payload 时提示复用原 payload 或换 key；同 key、同 payload 的 `running` operation 必须返回并继续轮询原 operation，而不是创建第二次发布。
 
+### local kind Console registry 默认值
+
+- `make console-dev`是本仓库 local kind walkthrough 的维护者入口；未显式设置`ORG_REGISTRY_ALLOWLIST`时，它必须仅为该进程默认使用`org.local,ghcr.io`，使`make kind-load`输出的`org.local/...@sha256:...`可发布。
+- 调用者显式提供`ORG_REGISTRY_ALLOWLIST`时必须完整覆盖该默认值；不得把`org.local`隐式加入production binary的通用配置默认值。
+- Getting Started继续显示可复制的显式环境命令，同时说明直接`make console-dev`采用上述local-dev默认值。registry校验仍只接受完整immutable digest，不因此接受tag。
+
 ## 待确认的实现取舍
 
 四项产品契约已由用户确认；开始实现前仍建议确认以下实现层取舍：

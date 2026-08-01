@@ -21,7 +21,7 @@ temporal-dev:
 	@temporal server start-dev --port 7233 --ui-port 8080 --db-filename .org/temporal.db
 
 console-dev:
-	@go run ./cmd/org-console
+	@ORG_REGISTRY_ALLOWLIST="$${ORG_REGISTRY_ALLOWLIST:-org.local,ghcr.io}" go run ./cmd/org-console
 
 demo-reset:
 	@sh scripts/demo-reset.sh

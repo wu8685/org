@@ -73,6 +73,8 @@ Production 环境提供自己的 Kubernetes context、kubeconfig、Temporal endp
 ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 ```
 
+`make console-dev`未收到显式`ORG_REGISTRY_ALLOWLIST`时，会为本地进程采用同样的`org.local,ghcr.io`默认值；显式环境值完整覆盖它。该行为只属于Makefile的local kind入口，不改变production binary默认配置。
+
 打开 `http://127.0.0.1:8090`。侧边栏只包含总览、Workers、Workflows 和 Runs。候选 Worker 在启动时自动注册 Org SDK contract；Console 只展示 registration/probe 状态和生成的只读 contract。Runtime DAG 来自经过验证的 semantic projection；节点 action 通过 Gateway action API 提交。
 
 ## Image 边界

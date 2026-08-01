@@ -80,6 +80,8 @@ Temporal Web 是高级诊断入口；完成新手流程不需要操作它。
 ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 ```
 
+这是 `make console-dev` 的 local-dev default，用于接受各 Sample `make kind-load`输出的`org.local/...@sha256:...`。上面的显式写法便于看清本地边界；若需要别的 registry，可用自己的`ORG_REGISTRY_ALLOWLIST`完整覆盖。production 启动不隐式信任`org.local`。
+
 打开 [http://127.0.0.1:8090](http://127.0.0.1:8090)。本地 Console 只绑定 loopback，并使用服务端配置的开发 Tenant 和 principal。
 
 ### 检查点

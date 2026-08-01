@@ -175,6 +175,30 @@ func TestRootSampleTargetsOnlyDelegateToSampleMakefiles(t *testing.T) {
 	}
 }
 
+func TestConsoleDevDefaultsToLocalKindRegistriesWithoutChangingProductionDefaults(t *testing.T) {
+	root := filepath.Join("..", "..")
+	makefile := read(t, filepath.Join(root, "Makefile"))
+	if !strings.Contains(makefile, `ORG_REGISTRY_ALLOWLIST="$${ORG_REGISTRY_ALLOWLIST:-org.local,ghcr.io}" go run ./cmd/org-console`) {
+		t.Fatal("console-dev must default to org.local,ghcr.io while preserving an explicit environment override")
+	}
+	config := read(t, filepath.Join(root, "internal", "config", "config.go"))
+	if strings.Contains(config, `RegistryAllowlist: []string{"org.local", "ghcr.io"}`) {
+		t.Fatal("production config default must not implicitly trust the local org.local registry")
+	}
+	request := domain.WorkerVersionPublishRequest{
+		WorkerName: "hello-worker", Version: "2026.08.2", Description: "Local Hello release",
+		Image:   "org.local/hello-worker@sha256:" + strings.Repeat("a", 64),
+		Runtime: domain.RuntimeSpec{CPU: "100m", Memory: "128Mi"},
+	}
+	if err := domain.ValidateWorkerVersionPublish(request, []string{"org.local", "ghcr.io"}); err != nil {
+		t.Fatalf("local Hello immutable digest was rejected by the console-dev allowlist: %v", err)
+	}
+	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
+	if !strings.Contains(gettingStarted, "make console-dev") || !strings.Contains(gettingStarted, "org.local,ghcr.io") || !strings.Contains(gettingStarted, "local-dev default") {
+		t.Fatal("Getting Started must explain the local console registry default and explicit command")
+	}
+}
+
 func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	root := filepath.Join("..", "..")
 	files := map[string][]string{
