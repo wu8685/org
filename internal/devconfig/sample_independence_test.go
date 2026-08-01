@@ -263,6 +263,12 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	if !strings.Contains(parallel, `{"subject":"release notes"}`) {
 		t.Errorf("parallel-confirmation README must include required Workflow input")
 	}
+	dynamic := read(t, filepath.Join(root, "samples", "dynamic-decision", "README.md"))
+	for _, want := range []string{"mode: automatic", "invalid_route", "Unsupported mode. Choose concise or detailed.", "安全错误", "raw error"} {
+		if !strings.Contains(dynamic, want) {
+			t.Errorf("dynamic-decision README missing safe invalid-route walkthrough %q", want)
+		}
+	}
 	for _, relative := range []string{"docs/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
 		for _, want := range []string{"YAML", "JSON", "Run description", "可选", "schema"} {

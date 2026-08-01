@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 1 | [Hello](hello/README.md) | 一个最小 Worker 需要哪些代码 | 两个顺序 Activity，最后进入 `completed` |
 | 2 | [Parallel confirmation](parallel-confirmation/README.md) | Workflow 如何等待人、恢复并并行执行 | `waiting-for-user`，确认后两个分支同时运行并 join |
-| 3 | [Dynamic decision](dynamic-decision/README.md) | 运行结果如何决定后续路径 | selected 分支执行，未选分支显示 `skipped` |
+| 3 | [Dynamic decision](dynamic-decision/README.md) | 运行结果如何决定后续路径 | selected 分支执行，未选分支显示 `skipped`；非法 route 显示安全 failure |
 
 如果还没有完成第一次发布，先回到 [本地快速上手](../docs/getting-started.md)。它会带你完整跑通 Hello。
 

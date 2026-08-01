@@ -2,7 +2,7 @@ module github.com/wu8685/org-sample-dynamic-decision
 
 go 1.26
 
-require github.com/wu8685/org v0.0.0-20260801101044-268e8896f5dd
+require github.com/wu8685/org v0.0.0-20260801183842-216290e5eefe
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

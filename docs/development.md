@@ -136,7 +136,7 @@ make dynamic-e2e-local
 
 `parallel-e2e-local` 使用 `samples/parallel-confirmation`，验证 idle `waiting-for-user`、Worker restart、经过 Gateway 授权且幂等的 `confirm` action、两个 runtime branch、join/finalize、action outcome reconciliation 和 Tenant audit。
 
-`dynamic-e2e-local` 使用 `samples/dynamic-decision`，同时运行 `concise` 和 `detailed` route。每个 Run 只执行选中的 Activity，同时将未选节点保留为 `skipped`，最后完成共同的 finalize node。
+`dynamic-e2e-local` 使用 `samples/dynamic-decision`，同时运行 `concise`、`detailed` 与非法 route。合法 Run 只执行选中的 Activity，同时将未选节点保留为 `skipped`，最后完成共同的 finalize node；非法 route 验证 `invalid_route` 安全 failure 在 projection、Run list 与 detail 中一致出现且不回显输入。
 
 测试在修改资源前打印 `E2E RUN_ID=<id>`。成功或失败时都会自动清理。如果进程在 Go cleanup 执行前被中断，使用打印的准确标识进行恢复：
 

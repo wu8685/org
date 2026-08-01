@@ -67,6 +67,80 @@ func TestLocalDynamicDecisionAcceptance(t *testing.T) {
 			}
 		})
 	}
+
+	invalidInput, _ := json.Marshal(map[string]string{"mode": "automatic-secret-value", "subject": "release notes"})
+	failedInvocation, err := controlPlane.Start(ctx, auth, service.StartRequest{WorkerName: run.workerName, Workflow: "DynamicDecisionWorkflow", Input: invalidInput})
+	if err != nil {
+		t.Fatalf("start invalid route: %v", err)
+	}
+	run.trackInvocation(auth, failedInvocation.ID)
+	failedView := waitForDynamicFailedProjection(t, ctx, controlPlane, auth, failedInvocation.ID)
+	if failedView.Failure == nil || failedView.Failure.Code != "invalid_route" || failedView.Failure.Message != "Unsupported mode. Choose concise or detailed." || failedView.Failure.TemplateID != "determine-route" || failedView.Failure.NodeLabel != "Determine route" || strings.Contains(failedView.Failure.Message, "automatic-secret-value") {
+		t.Fatalf("safe dynamic failure = %#v", failedView.Failure)
+	}
+	assertDynamicFailureHTTP(t, handler, failedInvocation.ID)
+}
+
+func waitForDynamicFailedProjection(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, runID string) service.InvocationView {
+	t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		view, err := control.GetInvocation(ctx, auth, runID)
+		if err == nil && view.Invocation.State == domain.InvocationFailed && view.Execution.Status == "failed" && view.SemanticProjection != nil && view.SemanticProjection.Status == "failed" && view.Failure != nil {
+			return view
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for safe dynamic failure: %v (last err: %v)", ctx.Err(), err)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertDynamicFailureHTTP(t *testing.T, handler http.Handler, runID string) {
+	t.Helper()
+	list := httptest.NewRecorder()
+	handler.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("failed Run list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listBody struct {
+		Items []struct {
+			ID           string             `json:"id"`
+			ErrorSummary *domain.RunFailure `json:"errorSummary"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listBody); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range listBody.Items {
+		if item.ID == runID {
+			found = true
+			if item.ErrorSummary == nil || item.ErrorSummary.Code != "invalid_route" || strings.Contains(item.ErrorSummary.Message, "automatic-secret-value") {
+				t.Fatalf("list errorSummary=%#v", item.ErrorSummary)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("failed Run %q missing from list: %s", runID, list.Body.String())
+	}
+
+	detail := httptest.NewRecorder()
+	handler.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+runID, nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("failed Run detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+	var detailBody struct {
+		Failure *domain.RunFailure `json:"failure"`
+	}
+	if err := json.Unmarshal(detail.Body.Bytes(), &detailBody); err != nil {
+		t.Fatal(err)
+	}
+	if detailBody.Failure == nil || detailBody.Failure.Code != "invalid_route" || detailBody.Failure.Message != "Unsupported mode. Choose concise or detailed." || detailBody.Failure.TemplateID != "determine-route" || detailBody.Failure.OccurredAt.IsZero() {
+		t.Fatalf("detail failure=%#v", detailBody.Failure)
+	}
 }
 
 func waitForDynamicSelectedRunningAndSkipped(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, runID, selectedTemplate, skippedTemplate string) service.InvocationView {

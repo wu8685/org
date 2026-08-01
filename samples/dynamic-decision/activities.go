@@ -4,10 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/wu8685/org/sdk/orgsdk"
 )
 
 const (
@@ -41,7 +42,7 @@ func DetermineRoute(input Input) (Route, error) {
 		return Route{}, errors.New("subject is required")
 	}
 	if mode != "concise" && mode != "detailed" {
-		return Route{}, fmt.Errorf("unsupported route %q", mode)
+		return Route{}, orgsdk.NewUserError("invalid_route", "Unsupported mode. Choose concise or detailed.")
 	}
 	return Route{Name: mode, Subject: subject}, nil
 }

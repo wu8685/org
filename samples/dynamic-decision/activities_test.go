@@ -1,6 +1,9 @@
 package dynamicdecision
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDetermineRouteNormalizesSupportedModes(t *testing.T) {
 	for input, want := range map[string]string{" concise ": "concise", "DETAILED": "detailed"} {
@@ -15,8 +18,12 @@ func TestDetermineRouteNormalizesSupportedModes(t *testing.T) {
 }
 
 func TestDetermineRouteRejectsUnsupportedMode(t *testing.T) {
-	if _, err := DetermineRoute(Input{Mode: "automatic", Subject: "release notes"}); err == nil {
+	_, err := DetermineRoute(Input{Mode: "automatic-secret-value", Subject: "release notes"})
+	if err == nil {
 		t.Fatal("unsupported route was accepted")
+	}
+	if err.Error() != "Unsupported mode. Choose concise or detailed." || strings.Contains(err.Error(), "automatic-secret-value") {
+		t.Fatalf("unsupported route did not return the bounded user-safe error: %q", err)
 	}
 }
 

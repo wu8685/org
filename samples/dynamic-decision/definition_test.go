@@ -85,7 +85,7 @@ func TestInvalidRouteFailsWithoutFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.ExecuteWorkflow(WorkflowName, Input{Mode: "automatic", Subject: "release notes"})
-	if err := env.WorkflowError(); err == nil || !strings.Contains(err.Error(), "unsupported route") {
+	if err := env.WorkflowError(); err == nil || !strings.Contains(err.Error(), "Unsupported mode. Choose concise or detailed.") || strings.Contains(err.Error(), `"automatic"`) {
 		t.Fatalf("workflow error = %v", err)
 	}
 	if worker.Calls("concise-branch") != 0 || worker.Calls("detailed-branch") != 0 || worker.Calls("finalize") != 0 {
@@ -97,6 +97,9 @@ func TestInvalidRouteFailsWithoutFallback(t *testing.T) {
 	}
 	if projection.Status != "failed" || nodeByTemplate(projection, "determine-route").Status != orgsdk.NodeStatusFailed {
 		t.Fatalf("failure projection = %#v", projection)
+	}
+	if projection.Failure == nil || projection.Failure.Code != "invalid_route" || projection.Failure.Message != "Unsupported mode. Choose concise or detailed." || projection.Failure.TemplateID != "determine-route" || projection.Failure.NodeLabel != "Determine route" {
+		t.Fatalf("safe failure projection = %#v", projection.Failure)
 	}
 }
 

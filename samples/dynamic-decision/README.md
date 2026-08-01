@@ -72,6 +72,8 @@ make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 5. 先观察 `determine-route=running`；route 确定后，观察 `concise-branch=running`、`detailed-branch=skipped`，最后 `finalize=running` 并完成。
 6. 再用 `mode=detailed` 触发独立 Run，观察相反路径。
 
+还可以用 `mode: automatic` 触发失败路径。`Determine route` 会失败，Runs list 与 detail 显示安全错误 code `invalid_route` 和 message `Unsupported mode. Choose concise or detailed.`。错误不会回显非法输入，也不会展示 raw error、stack 或底层 execution history；有权限的维护者可另行打开 advanced diagnostics。
+
 ## 教学演示延迟
 
 每条合法 route 只有 3 个实际 Activity 使用独立随机 2–5 秒延迟：`DetermineRoute`、被选中的 branch、`Finalize`。未选 branch 立即成为 `skipped`，不会执行 handler、取随机值或等待；它不能伪装成 `running`。每个 Run 通常约 6–15 秒再加少量调度开销即可完成。
