@@ -54,6 +54,16 @@ func main() {
 		RegistryAllowlist: cfg.RegistryAllowlist, TemporalWebBaseURL: cfg.TemporalWebBaseURL, TemporalNamespace: cfg.TemporalNamespace,
 		BootstrapEndpoint: cfg.WorkerBootstrapEndpoint, BootstrapVerifier: service.StrictBootstrapWorkloadVerifier{},
 	}, store, cluster, executor)
+	promotionCtx, cancelPromotions := context.WithCancel(context.Background())
+	if err := controlPlane.StartBootstrapPromotionController(promotionCtx); err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		cancelPromotions()
+		if err := controlPlane.WaitBootstrapPromotionController(); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("bootstrap promotion controller stopped: %v", err)
+		}
+	}()
 	consoleHandler := console.New(console.Config{
 		Authenticator: console.StaticAuthenticator{Identity: developmentIdentity(cfg, randomToken())},
 		ControlPlane:  controlPlane,

@@ -367,7 +367,9 @@ control plane必须区分publish-time registry media-type validation与runtime P
 | registration成功、poller缺失 | contract可读但不Ready | `contract-registered` / poller timeout |
 | probe mismatch | revoke promotion、保留evidence | `failed: probe-mismatch` |
 
-controller restart后从 durable pending record、credential reservation hash、Pod observation与registration receipt恢复，不依赖内存 goroutine。任何 retry不得创建第二个 WorkerVersion 或重置已消费 credential。
+controller restart后从 durable pending record、credential reservation hash、Pod observation与registration receipt恢复，不依赖HTTP handler goroutine。registration acceptance同时创建server-owned promotion attempt ID；该attempt在poller、pinned probe、SetCurrent与最终本地状态提交之间保持稳定。probe Workflow ID包含attempt ID；若start response丢失后Temporal返回AlreadyStarted，controller只attach到该相同attempt的既有Run，不创建另一个probe，也不把合法release误判为失败。
+
+promotion阶段与对应Tenant-scoped Audit在同一次store commit中持久化；写失败时二者都不前进。controller对仍为pending的瞬态持久化失败继续调度同一receipt/attempt，process restart也可再次恢复；poller、probe、identity或SetCurrent的确定性失败进入terminal failed阶段。任何retry不得创建第二个WorkerVersion、重置已消费credential或生成新的promotion attempt。
 
 ## Credential泄露边界
 

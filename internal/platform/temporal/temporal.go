@@ -9,6 +9,7 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
@@ -77,12 +78,8 @@ func hasWorkflowPoller(queues []client.WorkerDeploymentTaskQueueInfo, taskQueue 
 }
 
 func (c *Client) Probe(ctx context.Context, version domain.WorkerVersion) (service.RuntimeIdentity, error) {
-	run, err := c.sdk.ExecuteWorkflow(ctx, buildProbeStartOptions(version), orgsdk.ReservedContractProbeWorkflow)
+	probe, err := runContractProbe(ctx, c.sdk, version)
 	if err != nil {
-		return service.RuntimeIdentity{}, err
-	}
-	var probe orgsdk.ContractProbe
-	if err := run.Get(ctx, &probe); err != nil {
 		return service.RuntimeIdentity{}, err
 	}
 	return service.RuntimeIdentity{
@@ -91,9 +88,35 @@ func (c *Client) Probe(ctx context.Context, version domain.WorkerVersion) (servi
 	}, nil
 }
 
+type contractProbeClient interface {
+	ExecuteWorkflow(context.Context, client.StartWorkflowOptions, interface{}, ...interface{}) (client.WorkflowRun, error)
+	GetWorkflow(context.Context, string, string) client.WorkflowRun
+}
+
+func runContractProbe(ctx context.Context, sdk contractProbeClient, version domain.WorkerVersion) (orgsdk.ContractProbe, error) {
+	options := buildProbeStartOptions(version)
+	run, err := sdk.ExecuteWorkflow(ctx, options, orgsdk.ReservedContractProbeWorkflow)
+	if err != nil {
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		if !errors.As(err, &alreadyStarted) {
+			return orgsdk.ContractProbe{}, err
+		}
+		run = sdk.GetWorkflow(ctx, options.ID, alreadyStarted.RunId)
+	}
+	var probe orgsdk.ContractProbe
+	if err := run.Get(ctx, &probe); err != nil {
+		return orgsdk.ContractProbe{}, err
+	}
+	return probe, nil
+}
+
 func buildProbeStartOptions(version domain.WorkerVersion) client.StartWorkflowOptions {
+	attemptID := version.PromotionAttemptID
+	if attemptID == "" {
+		attemptID = "direct"
+	}
 	return client.StartWorkflowOptions{
-		ID: "org-sdk-probe-" + version.ID, TaskQueue: version.TaskQueue,
+		ID: "org-sdk-probe-" + version.ID + "-" + attemptID, TaskQueue: version.TaskQueue,
 		WorkflowIDReusePolicy:                    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowIDConflictPolicy:                 enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,

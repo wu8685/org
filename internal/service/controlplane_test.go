@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,236 @@ func TestAcceptedBootstrapRegistrationRunsPinnedProbeBeforePromotion(t *testing.
 	if got := strings.Join(executor.calls, ","); got != "wait-temporal,probe,set-current" {
 		t.Fatalf("promotion calls = %s", got)
 	}
+	actions := map[string]bool{}
+	for _, audit := range cp.store.Audits(version.TenantID) {
+		actions[audit.Action] = true
+	}
+	for _, action := range []string{"worker.version.promotion.waiting-for-poller", "worker.version.promotion.probing-contract", "worker.version.promotion.setting-current", "worker.version.promotion.succeeded"} {
+		if !actions[action] {
+			t.Fatalf("promotion Audit missing %q: %#v", action, cp.store.Audits(version.TenantID))
+		}
+	}
+}
+
+func TestBootstrapPromotionFailureIsDurablyMarkedAndAudited(t *testing.T) {
+	cluster := &fakeCluster{}
+	executor := &fakeExecutor{probeErr: errors.New("probe unavailable")}
+	cp, auth := newTestControlPlane(t, Config{
+		RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap",
+		BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return nil }),
+	}, cluster, executor)
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := bootstrapContract(t, version.Version)
+	receipt, _, err := cp.RegisterBootstrap(context.Background(), cluster.bootstrap.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.PromoteBootstrap(context.Background(), receipt); !errors.Is(err, executor.probeErr) {
+		t.Fatalf("PromoteBootstrap error = %v", err)
+	}
+	stored, _ := cp.store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+	if stored.State != domain.WorkerVersionFailed || stored.PromotionPhase != domain.WorkerVersionPromotionFailed {
+		t.Fatalf("failed promotion state = %#v", stored)
+	}
+	audits := cp.store.Audits(version.TenantID)
+	if len(audits) == 0 || audits[len(audits)-1].Action != "worker.version.promotion.failed" || audits[len(audits)-1].Outcome != "failed" {
+		t.Fatalf("failed promotion Audit = %#v", audits)
+	}
+}
+
+func TestPromotionControllerResumesAcceptedPendingVersionAfterRestart(t *testing.T) {
+	now := time.Date(2026, 8, 1, 15, 0, 0, 0, time.UTC)
+	cluster := &fakeCluster{}
+	firstExecutor := &fakeExecutor{}
+	cfg := Config{
+		RegistryAllowlist: []string{"registry.example.com"}, BootstrapTTL: 15 * time.Minute, Now: func() time.Time { return now },
+		BootstrapEndpoint: "https://org.local/internal/bootstrap",
+		BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return nil }),
+	}
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant := testTenant("tenant-test", "test-tenant")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	first := New(cfg, store, cluster, firstExecutor)
+	auth := authFor(tenant)
+	if _, err := first.CreateWorker(context.Background(), auth, CreateWorkerRequest{WorkerName: "payments-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := first.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := bootstrapContract(t, version.Version)
+	if _, _, err := first.RegisterBootstrap(context.Background(), cluster.bootstrap.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, contract); err != nil {
+		t.Fatal(err)
+	}
+
+	promoted := make(chan struct{}, 1)
+	restartedExecutor := &fakeExecutor{probeResult: RuntimeIdentity{ManifestDigest: contract.ManifestDigest, SDKModuleVersion: orgsdk.SDKModuleVersion, RuntimeProtocolVersion: orgsdk.RuntimeProtocolVersion, WorkerBuildID: version.Version}, setCurrent: func() { promoted <- struct{}{} }}
+	reopened, err := NewFileStore(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(cfg, reopened, cluster, restartedExecutor)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := restarted.StartBootstrapPromotionController(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-promoted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted pending promotion was not resumed")
+	}
+	cancel()
+	if err := restarted.WaitBootstrapPromotionController(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	stored, _ := reopened.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+	if stored.State != domain.WorkerVersionReady || !stored.Current || stored.PromotionAttemptID == "" {
+		t.Fatalf("resumed version = %#v", stored)
+	}
+}
+
+func TestPromotionControllerRetriesAfterFinalStatePersistenceFailure(t *testing.T) {
+	cluster := &fakeCluster{}
+	executor := &fakeExecutor{}
+	base := NewMemoryStore()
+	tenant := testTenant("tenant-test", "test-tenant")
+	if err := base.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	store := &promotionCommitFaultStore{Store: base, failSucceededOnce: true}
+	cp := New(Config{
+		RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap",
+		BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return nil }),
+	}, store, cluster, executor)
+	auth := authFor(tenant)
+	if _, err := cp.CreateWorker(context.Background(), auth, CreateWorkerRequest{WorkerName: "payments-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := bootstrapContract(t, version.Version)
+	if _, _, err := cp.RegisterBootstrap(context.Background(), cluster.bootstrap.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, contract); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cp.StartBootstrapPromotionController(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		stored, _ := base.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+		if stored.State == domain.WorkerVersionReady {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("promotion did not recover from persistence failure: %#v", stored)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := cp.WaitBootstrapPromotionController(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	setCurrentCalls := 0
+	for _, call := range executor.calls {
+		if call == "set-current" {
+			setCurrentCalls++
+		}
+	}
+	if setCurrentCalls != 2 {
+		t.Fatalf("SetCurrent calls = %d, want one retried call after the lost local commit", setCurrentCalls)
+	}
+}
+
+func TestPromotionControllerSingleflightsConcurrentExactReceiptRetries(t *testing.T) {
+	cluster := &fakeCluster{}
+	entered, release := make(chan struct{}), make(chan struct{})
+	executor := &fakeExecutor{waitForPoller: func() error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	cp, auth := newTestControlPlane(t, Config{
+		RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap",
+		BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return nil }),
+	}, cluster, executor)
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, _, err := cp.RegisterBootstrap(context.Background(), cluster.bootstrap.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, bootstrapContract(t, version.Version))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cp.StartBootstrapPromotionController(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("promotion did not enter poller wait")
+	}
+	if err := cp.ScheduleBootstrapPromotion(ctx, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.ScheduleBootstrapPromotion(ctx, receipt); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	deadline := time.After(time.Second)
+	for {
+		stored, _ := cp.store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+		if stored.State == domain.WorkerVersionReady {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("promotion did not finish: %#v", stored)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := cp.WaitBootstrapPromotionController(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if got := strings.Count(strings.Join(executor.calls, ","), "wait-temporal"); got != 1 {
+		t.Fatalf("poller waits = %d, want one singleflight promotion: %v", got, executor.calls)
+	}
+}
+
+type promotionCommitFaultStore struct {
+	Store
+	failSucceededOnce bool
+}
+
+func (s *promotionCommitFaultStore) CommitWorkerVersionAudit(tenantID string, version domain.WorkerVersion, audit domain.AuditRecord) error {
+	if s.failSucceededOnce && version.PromotionPhase == domain.WorkerVersionPromotionSucceeded {
+		s.failSucceededOnce = false
+		return errors.New("injected final promotion persistence failure")
+	}
+	return s.Store.CommitWorkerVersionAudit(tenantID, version, audit)
 }
 
 func TestRegistrationDuringKubernetesReadinessDoesNotLoseAcceptedContract(t *testing.T) {
@@ -364,14 +595,16 @@ func (f *fakeCluster) WaitReady(_ context.Context, version domain.WorkerVersion)
 }
 
 type fakeExecutor struct {
-	calls       []string
-	starts      []ExecutionStart
-	queryResult []byte
-	lastQuery   string
-	signals     []fakeSignal
-	signalErr   error
-	probeResult RuntimeIdentity
-	probeErr    error
+	calls         []string
+	starts        []ExecutionStart
+	queryResult   []byte
+	lastQuery     string
+	signals       []fakeSignal
+	signalErr     error
+	probeResult   RuntimeIdentity
+	probeErr      error
+	setCurrent    func()
+	waitForPoller func() error
 }
 
 type fakeSignal struct {
@@ -381,6 +614,9 @@ type fakeSignal struct {
 
 func (f *fakeExecutor) WaitForPoller(context.Context, domain.WorkerVersion) error {
 	f.calls = append(f.calls, "wait-temporal")
+	if f.waitForPoller != nil {
+		return f.waitForPoller()
+	}
 	return nil
 }
 func (f *fakeExecutor) Probe(_ context.Context, version domain.WorkerVersion) (RuntimeIdentity, error) {
@@ -395,6 +631,9 @@ func (f *fakeExecutor) Probe(_ context.Context, version domain.WorkerVersion) (R
 }
 func (f *fakeExecutor) SetCurrent(context.Context, domain.WorkerVersion) error {
 	f.calls = append(f.calls, "set-current")
+	if f.setCurrent != nil {
+		f.setCurrent()
+	}
 	return nil
 }
 func (f *fakeExecutor) Start(_ context.Context, s ExecutionStart) (string, error) {

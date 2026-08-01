@@ -177,6 +177,7 @@ func (r *BootstrapRegistry) Register(ctx context.Context, token string, evidence
 	credential.AcceptedAt, credential.ReceiptUntil, credential.Revoked = &accepted, &receiptUntil, true
 	version.ManifestDigest, version.Metadata = request.ManifestDigest, request.Metadata
 	version.RegistrationStatus, version.RegisteredAt, version.UpdatedAt = domain.BootstrapRegistrationAccepted, &accepted, accepted
+	version.PromotionPhase, version.PromotionAttemptID, version.PromotionUpdatedAt = domain.WorkerVersionPromotionQueued, randomID("promotion"), &accepted
 	audit := domain.AuditRecord{
 		ID: randomID("aud"), TenantID: version.TenantID, TenantSlug: version.TenantSlug,
 		PrincipalID: "worker-bootstrap", AuthenticationMethod: "kubernetes-tokenreview",
@@ -208,7 +209,13 @@ func validateBootstrapAcceptance(tenantID string, currentVersion, acceptedVersio
 	expectedVersion.RegistrationStatus = acceptedVersion.RegistrationStatus
 	expectedVersion.RegisteredAt = acceptedVersion.RegisteredAt
 	expectedVersion.UpdatedAt = acceptedVersion.UpdatedAt
+	expectedVersion.PromotionPhase = acceptedVersion.PromotionPhase
+	expectedVersion.PromotionAttemptID = acceptedVersion.PromotionAttemptID
+	expectedVersion.PromotionUpdatedAt = acceptedVersion.PromotionUpdatedAt
 	if !reflect.DeepEqual(expectedVersion, acceptedVersion) {
+		return ErrBootstrapRejected
+	}
+	if acceptedVersion.PromotionPhase != domain.WorkerVersionPromotionQueued || acceptedVersion.PromotionAttemptID == "" || acceptedVersion.PromotionUpdatedAt == nil {
 		return ErrBootstrapRejected
 	}
 	if currentCredential.TokenHash == "" || currentCredential.TokenHash != acceptedCredential.TokenHash || currentCredential.Binding != acceptedCredential.Binding || currentCredential.AcceptedAt != nil || currentCredential.Revoked {

@@ -27,6 +27,27 @@ func TestBootstrapHTTPDerivesTargetFromBearerAndReturnsAcceptedReceipt(t *testin
 	}
 }
 
+func TestBootstrapHTTPSchedulesPromotionWithoutCallingPromoterGoroutine(t *testing.T) {
+	contract := bootstrapContract(t, "v1")
+	body, _ := json.Marshal(map[string]any{"manifestDigest": contract.ManifestDigest, "contract": contract.Metadata, "buildId": contract.BuildID})
+	backend := &fakeManagedBootstrapService{fakeBootstrapService: fakeBootstrapService{receipt: BootstrapRegistrationReceipt{ID: "reg-1", WorkerVersionID: "ver-1"}}}
+	handler := NewBootstrapRegistrationHandler(backend, BootstrapEvidenceResolverFunc(func(*http.Request) (BootstrapWorkloadEvidence, error) {
+		return BootstrapWorkloadEvidence{AudienceVerified: true}, nil
+	}))
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/bootstrap/register", strings.NewReader(string(body)))
+	request.Header.Set("Authorization", "Bearer opaque-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || backend.scheduled != "reg-1" {
+		t.Fatalf("status=%d scheduled=%q body=%s", response.Code, backend.scheduled, response.Body.String())
+	}
+	select {
+	case <-backend.promoted:
+		t.Fatal("HTTP handler launched the legacy untracked promoter")
+	default:
+	}
+}
+
 func TestBootstrapHTTPRejectionsUseMachineReadableStateWithoutCredentialEcho(t *testing.T) {
 	handler := NewBootstrapRegistrationHandler(&fakeBootstrapService{}, nil)
 	request := httptest.NewRequest(http.MethodPost, "/internal/v1/bootstrap/register", strings.NewReader(`{}`))
@@ -39,11 +60,36 @@ func TestBootstrapHTTPRejectionsUseMachineReadableStateWithoutCredentialEcho(t *
 }
 
 type fakeBootstrapService struct {
-	token   string
-	receipt BootstrapRegistrationReceipt
+	token     string
+	receipt   BootstrapRegistrationReceipt
+	scheduled string
+}
+
+func (f *fakeBootstrapService) ScheduleBootstrapPromotion(_ context.Context, receipt BootstrapRegistrationReceipt) error {
+	f.scheduled = receipt.ID
+	return nil
 }
 
 func (f *fakeBootstrapService) RegisterBootstrap(_ context.Context, token string, _ BootstrapWorkloadEvidence, _ domain.WorkerContractRegistration) (BootstrapRegistrationReceipt, domain.WorkerVersion, error) {
 	f.token = token
 	return f.receipt, domain.WorkerVersion{}, nil
+}
+
+type fakeManagedBootstrapService struct {
+	fakeBootstrapService
+	scheduled string
+	promoted  chan struct{}
+}
+
+func (f *fakeManagedBootstrapService) ScheduleBootstrapPromotion(_ context.Context, receipt BootstrapRegistrationReceipt) error {
+	f.scheduled = receipt.ID
+	return nil
+}
+
+func (f *fakeManagedBootstrapService) PromoteBootstrap(context.Context, BootstrapRegistrationReceipt) (domain.WorkerVersion, error) {
+	if f.promoted == nil {
+		f.promoted = make(chan struct{}, 1)
+	}
+	f.promoted <- struct{}{}
+	return domain.WorkerVersion{}, nil
 }

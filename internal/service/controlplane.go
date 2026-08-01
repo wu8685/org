@@ -152,21 +152,129 @@ type Store interface {
 	BootstrapCredential(string) (domain.BootstrapCredential, bool)
 	BootstrapCredentials() []domain.BootstrapCredential
 	CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, domain.AuditRecord) error
+	CommitWorkerVersionAudit(string, domain.WorkerVersion, domain.AuditRecord) error
 }
 
 type ControlPlane struct {
-	cfg       Config
-	store     Store
-	cluster   Cluster
-	executor  Executor
-	bootstrap *BootstrapRegistry
-	mu        sync.Mutex
+	cfg              Config
+	store            Store
+	cluster          Cluster
+	executor         Executor
+	bootstrap        *BootstrapRegistry
+	mu               sync.Mutex
+	promotionMu      sync.Mutex
+	promotionQueue   chan BootstrapRegistrationReceipt
+	promotionQueued  map[string]bool
+	promotionStarted bool
+	promotionDone    chan error
 }
 
 func New(cfg Config, store Store, cluster Cluster, executor Executor) *ControlPlane {
-	cp := &ControlPlane{cfg: cfg, store: store, cluster: cluster, executor: executor}
+	cp := &ControlPlane{cfg: cfg, store: store, cluster: cluster, executor: executor, promotionQueue: make(chan BootstrapRegistrationReceipt, 256), promotionQueued: map[string]bool{}}
 	cp.bootstrap = NewBootstrapRegistry(store, BootstrapRegistryConfig{TTL: cfg.BootstrapTTL, ReceiptGrace: cfg.BootstrapReceiptGrace, Now: cfg.Now, Verifier: cfg.BootstrapVerifier})
 	return cp
+}
+
+func (c *ControlPlane) StartBootstrapPromotionController(ctx context.Context) error {
+	c.promotionMu.Lock()
+	if c.promotionStarted {
+		c.promotionMu.Unlock()
+		return errors.New("bootstrap promotion controller is already running")
+	}
+	c.promotionStarted = true
+	c.promotionDone = make(chan error, 1)
+	done := c.promotionDone
+	c.promotionMu.Unlock()
+	go c.runBootstrapPromotionController(ctx, done)
+	for _, receipt := range c.pendingBootstrapPromotionReceipts() {
+		if err := c.ScheduleBootstrapPromotion(ctx, receipt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *ControlPlane) WaitBootstrapPromotionController() error {
+	c.promotionMu.Lock()
+	done := c.promotionDone
+	c.promotionMu.Unlock()
+	if done == nil {
+		return errors.New("bootstrap promotion controller is not running")
+	}
+	return <-done
+}
+
+func (c *ControlPlane) ScheduleBootstrapPromotion(ctx context.Context, receipt BootstrapRegistrationReceipt) error {
+	if receipt.ID == "" || receipt.WorkerVersionID == "" {
+		return errors.New("bootstrap promotion receipt is required")
+	}
+	c.promotionMu.Lock()
+	if !c.promotionStarted {
+		c.promotionMu.Unlock()
+		return errors.New("bootstrap promotion controller is not running")
+	}
+	if c.promotionQueued[receipt.WorkerVersionID] {
+		c.promotionMu.Unlock()
+		return nil
+	}
+	c.promotionQueued[receipt.WorkerVersionID] = true
+	queue := c.promotionQueue
+	c.promotionMu.Unlock()
+	select {
+	case queue <- receipt:
+		return nil
+	case <-ctx.Done():
+		c.promotionMu.Lock()
+		delete(c.promotionQueued, receipt.WorkerVersionID)
+		c.promotionMu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (c *ControlPlane) runBootstrapPromotionController(ctx context.Context, done chan<- error) {
+	defer func() {
+		c.promotionMu.Lock()
+		c.promotionStarted = false
+		c.promotionMu.Unlock()
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			done <- ctx.Err()
+			return
+		case receipt := <-c.promotionQueue:
+			_, promotionErr := c.PromoteBootstrap(ctx, receipt)
+			c.promotionMu.Lock()
+			delete(c.promotionQueued, receipt.WorkerVersionID)
+			c.promotionMu.Unlock()
+			if promotionErr != nil && ctx.Err() == nil {
+				if version, err := c.bootstrapVersion(receipt); err == nil && version.State == domain.WorkerVersionPending {
+					retry := time.NewTimer(250 * time.Millisecond)
+					select {
+					case <-ctx.Done():
+						retry.Stop()
+					case <-retry.C:
+						_ = c.ScheduleBootstrapPromotion(ctx, receipt)
+					}
+				}
+			}
+		}
+	}
+}
+
+func (c *ControlPlane) pendingBootstrapPromotionReceipts() []BootstrapRegistrationReceipt {
+	var receipts []BootstrapRegistrationReceipt
+	for _, credential := range c.store.BootstrapCredentials() {
+		if credential.AcceptedAt == nil || credential.ReceiptID == "" {
+			continue
+		}
+		version, ok := c.store.WorkerVersion(credential.Binding.TenantID, credential.Binding.WorkerName, credential.Binding.Version)
+		if !ok || version.ID != credential.Binding.WorkerVersionID || version.State != domain.WorkerVersionPending || version.RegistrationStatus != domain.BootstrapRegistrationAccepted {
+			continue
+		}
+		receipts = append(receipts, BootstrapRegistrationReceipt{ID: credential.ReceiptID, WorkerVersionID: version.ID, ManifestDigest: version.ManifestDigest, AcceptedAt: *credential.AcceptedAt})
+	}
+	return receipts
 }
 
 func (c *ControlPlane) IssueBootstrap(version domain.WorkerVersion, deploymentGeneration string) (BootstrapMaterial, error) {
@@ -203,6 +311,9 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 	if version.State == domain.WorkerVersionReady {
 		return version, nil
 	}
+	if version.PromotionAttemptID == "" {
+		return domain.WorkerVersion{}, errors.New("durable bootstrap promotion attempt is required")
+	}
 	for !version.Health.KubernetesReady {
 		if version.State == domain.WorkerVersionFailed {
 			return version, errors.New("candidate workload failed before promotion")
@@ -218,11 +329,17 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 		}
 		version = refreshed
 	}
+	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionWaiting); err != nil {
+		return domain.WorkerVersion{}, err
+	}
 	if err := c.executor.WaitForPoller(ctx, version); err != nil {
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
 		return failed, cause
 	}
 	version.Health.WorkerPolling = true
+	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionProbing); err != nil {
+		return domain.WorkerVersion{}, err
+	}
 	identity, err := c.executor.Probe(ctx, version)
 	if err != nil {
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
@@ -231,6 +348,9 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 	if err := validateRuntimeIdentity(version, identity); err != nil {
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
 		return failed, cause
+	}
+	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionSetting); err != nil {
+		return domain.WorkerVersion{}, err
 	}
 	if err := c.executor.SetCurrent(ctx, version); err != nil {
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
@@ -255,8 +375,10 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 			}
 		}
 	}
-	version.Current, version.State, version.UpdatedAt = true, domain.WorkerVersionReady, time.Now().UTC()
-	if err := c.store.SaveWorkerVersion(version.TenantID, version); err != nil {
+	now := time.Now().UTC()
+	version.Current, version.State, version.UpdatedAt = true, domain.WorkerVersionReady, now
+	version.PromotionPhase, version.PromotionUpdatedAt = domain.WorkerVersionPromotionSucceeded, &now
+	if err := c.commitPromotionTransition(version, domain.WorkerVersionPromotionSucceeded, "success", ""); err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	worker.CurrentVersion, worker.UpdatedAt = version.Version, time.Now().UTC()
@@ -264,6 +386,28 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 		return domain.WorkerVersion{}, err
 	}
 	return version, nil
+}
+
+func (c *ControlPlane) savePromotionPhase(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase) error {
+	now := time.Now().UTC()
+	version.PromotionPhase, version.PromotionUpdatedAt, version.UpdatedAt = phase, &now, now
+	return c.commitPromotionTransition(version, phase, "in-progress", "")
+}
+
+func (c *ControlPlane) commitPromotionTransition(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase, outcome, errorClass string) error {
+	audit := domain.AuditRecord{
+		ID: newID("aud"), TenantID: version.TenantID, TenantSlug: version.TenantSlug,
+		PrincipalID: "bootstrap-promotion-controller", AuthenticationMethod: "internal-controller",
+		RequestID: version.PromotionAttemptID, Action: "worker.version.promotion." + string(phase),
+		Permission: "bootstrap:promote", AuthorizationResult: "allowed", Outcome: outcome,
+		TargetType: "workerVersion", TargetID: version.ID, ErrorClass: errorClass,
+		References: map[string]string{
+			"workerName": version.WorkerName, "version": version.Version,
+			"promotionAttemptId": version.PromotionAttemptID, "phase": string(phase),
+		},
+		CreatedAt: time.Now().UTC(),
+	}
+	return c.store.CommitWorkerVersionAudit(version.TenantID, version, audit)
 }
 
 func (c *ControlPlane) CreateWorker(_ context.Context, auth AuthenticatedContext, req CreateWorkerRequest) (result domain.Worker, err error) {
@@ -471,8 +615,18 @@ func validateRuntimeIdentity(version domain.WorkerVersion, identity RuntimeIdent
 }
 
 func (c *ControlPlane) failWorkerVersion(tenantID string, d domain.WorkerVersion, cause error) (domain.WorkerVersion, error) {
-	d.State, d.Failure = domain.WorkerVersionFailed, cause.Error()
-	_ = c.store.SaveWorkerVersion(tenantID, d)
+	now := time.Now().UTC()
+	d.State, d.Failure, d.UpdatedAt = domain.WorkerVersionFailed, cause.Error(), now
+	if d.RegistrationStatus == domain.BootstrapRegistrationAccepted {
+		d.PromotionPhase, d.PromotionUpdatedAt = domain.WorkerVersionPromotionFailed, &now
+		if err := c.commitPromotionTransition(d, domain.WorkerVersionPromotionFailed, "failed", classifyError(cause)); err != nil {
+			return d, errors.Join(cause, err)
+		}
+		return d, cause
+	}
+	if err := c.store.SaveWorkerVersion(tenantID, d); err != nil {
+		return d, errors.Join(cause, err)
+	}
 	return d, cause
 }
 

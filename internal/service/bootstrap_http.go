@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/wu8685/org/internal/domain"
 )
@@ -14,8 +13,8 @@ import (
 type BootstrapRegistrationService interface {
 	RegisterBootstrap(context.Context, string, BootstrapWorkloadEvidence, domain.WorkerContractRegistration) (BootstrapRegistrationReceipt, domain.WorkerVersion, error)
 }
-type BootstrapPromotionService interface {
-	PromoteBootstrap(context.Context, BootstrapRegistrationReceipt) (domain.WorkerVersion, error)
+type BootstrapPromotionScheduler interface {
+	ScheduleBootstrapPromotion(context.Context, BootstrapRegistrationReceipt) error
 }
 
 type BootstrapEvidenceResolver interface {
@@ -63,12 +62,12 @@ func NewBootstrapRegistrationHandler(service BootstrapRegistrationService, resol
 			writeBootstrapRejected(response, status, "registration-rejected")
 			return
 		}
-		if promoter, ok := service.(BootstrapPromotionService); ok {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				_, _ = promoter.PromoteBootstrap(ctx, receipt)
-			}()
+		scheduler, ok := service.(BootstrapPromotionScheduler)
+		if !ok || scheduler.ScheduleBootstrapPromotion(request.Context(), receipt) != nil {
+			response.Header().Set("Content-Type", "application/json")
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(response).Encode(map[string]any{"state": "accepted", "reason": "promotion-pending", "receiptId": receipt.ID})
+			return
 		}
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(map[string]any{"state": "accepted", "receiptId": receipt.ID})

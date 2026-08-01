@@ -108,6 +108,9 @@ func (r *acceptanceRun) controlPlane() *service.ControlPlane {
 	port := listener.Addr().(*net.TCPAddr).Port
 	r.bootstrapURL = fmt.Sprintf("http://127.0.0.1:%d/internal/v1/bootstrap/register", port)
 	r.control = service.New(service.Config{RegistryAllowlist: []string{"org.local"}, BootstrapEndpoint: fmt.Sprintf("http://host.docker.internal:%d/internal/v1/bootstrap/register", port), BootstrapVerifier: service.StrictBootstrapWorkloadVerifier{}}, r.store, cluster, executor)
+	if err := r.control.StartBootstrapPromotionController(r.ctx); err != nil {
+		r.t.Fatalf("start bootstrap promotion controller: %v", err)
+	}
 	r.bootstrapServer = &http.Server{Handler: service.NewBootstrapRegistrationHandler(r.control, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org"}, nil)), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = r.bootstrapServer.Serve(listener) }()
 	for suffix := range r.tenants {

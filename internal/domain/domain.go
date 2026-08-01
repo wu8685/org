@@ -184,6 +184,17 @@ const (
 	BootstrapRegistrationRejected BootstrapRegistrationStatus = "rejected"
 )
 
+type WorkerVersionPromotionPhase string
+
+const (
+	WorkerVersionPromotionQueued    WorkerVersionPromotionPhase = "queued"
+	WorkerVersionPromotionWaiting   WorkerVersionPromotionPhase = "waiting-for-poller"
+	WorkerVersionPromotionProbing   WorkerVersionPromotionPhase = "probing-contract"
+	WorkerVersionPromotionSetting   WorkerVersionPromotionPhase = "setting-current"
+	WorkerVersionPromotionSucceeded WorkerVersionPromotionPhase = "succeeded"
+	WorkerVersionPromotionFailed    WorkerVersionPromotionPhase = "failed"
+)
+
 type BootstrapBinding struct {
 	TenantID               string    `json:"tenantId"`
 	TenantSlug             string    `json:"tenantSlug"`
@@ -405,6 +416,9 @@ type WorkerVersion struct {
 	Failure                  string                      `json:"failure,omitempty"`
 	RegistrationStatus       BootstrapRegistrationStatus `json:"registrationStatus,omitempty"`
 	RegisteredAt             *time.Time                  `json:"registeredAt,omitempty"`
+	PromotionPhase           WorkerVersionPromotionPhase `json:"promotionPhase,omitempty"`
+	PromotionAttemptID       string                      `json:"promotionAttemptId,omitempty"`
+	PromotionUpdatedAt       *time.Time                  `json:"promotionUpdatedAt,omitempty"`
 }
 type Invocation struct {
 	ID                 string          `json:"id"`

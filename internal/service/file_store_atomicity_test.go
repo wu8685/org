@@ -96,3 +96,57 @@ func TestFileStoreFailedQuotaReconcileReportsNoCommittedRemoval(t *testing.T) {
 		t.Fatalf("failed reconcile changed live leases: %#v", got)
 	}
 }
+
+func TestFileStorePromotionTransitionAndAuditCommitAtomically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant := testTenant("tenant-promotion", "promotion")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	version := domain.WorkerVersion{
+		ID: "ver-1", TenantID: tenant.ID, TenantSlug: tenant.Slug,
+		WorkerName: "worker", Version: "v1", State: domain.WorkerVersionPending,
+		PromotionPhase: domain.WorkerVersionPromotionQueued, PromotionAttemptID: "promotion-1",
+	}
+	if err := store.SaveWorkerVersion(tenant.ID, version); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	candidate := version
+	candidate.PromotionPhase, candidate.PromotionUpdatedAt = domain.WorkerVersionPromotionProbing, &now
+	audit := domain.AuditRecord{
+		ID: "audit-1", TenantID: tenant.ID, TenantSlug: tenant.Slug,
+		PrincipalID: "bootstrap-promotion-controller", AuthenticationMethod: "internal-controller",
+		RequestID: version.PromotionAttemptID,
+		Action:    "worker.version.promotion.probing-contract", Permission: "bootstrap:promote",
+		AuthorizationResult: "allowed", Outcome: "in-progress", TargetType: "workerVersion", TargetID: version.ID,
+		CreatedAt: now,
+	}
+	injected := errors.New("injected persist failure")
+	store.persistSnapshot = func(fileState) error { return injected }
+	if err := store.CommitWorkerVersionAudit(tenant.ID, candidate, audit); !errors.Is(err, injected) {
+		t.Fatalf("CommitWorkerVersionAudit error = %v", err)
+	}
+	if got, _ := store.WorkerVersion(tenant.ID, version.WorkerName, version.Version); got.PromotionPhase != domain.WorkerVersionPromotionQueued {
+		t.Fatalf("failed transition changed live version: %#v", got)
+	}
+	if got := store.Audits(tenant.ID); len(got) != 0 {
+		t.Fatalf("failed transition changed live audits: %#v", got)
+	}
+
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := reopened.WorkerVersion(tenant.ID, version.WorkerName, version.Version); got.PromotionPhase != domain.WorkerVersionPromotionQueued {
+		t.Fatalf("failed transition changed disk version: %#v", got)
+	}
+	if got := reopened.Audits(tenant.ID); len(got) != 0 {
+		t.Fatalf("failed transition changed disk audits: %#v", got)
+	}
+}
