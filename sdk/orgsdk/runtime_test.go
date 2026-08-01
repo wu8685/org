@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	temporalactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestAwaitConfirmationUsesWorkflowSignalAndProjectsIdleNode(t *testing.T) {
@@ -150,6 +151,93 @@ func TestWaitForActionRequiresFinitePositiveTimeout(t *testing.T) {
 	env.ExecuteWorkflow(workflowDefinition.workflow, "")
 	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "positive timeout") {
 		t.Fatalf("invalid wait timeout error = %v", err)
+	}
+}
+
+func TestConcurrentWaitForActionRoutesReverseOrderSignalsWithoutLoss(t *testing.T) {
+	definition := Definition{
+		Name: "parallel-actions", Bounds: RuntimeBounds{MaxInstancesPerFanOut: 2, MaxRuntimeNodes: 2, MaxProjectionBytes: 8192},
+		Templates: []NodeTemplate{
+			{ID: "approval-a", Label: "Approval A", Type: NodeTypeWaitForAction, Actions: []ActionDefinition{{Name: "confirm-a", Label: "Confirm A", RequiredPermission: "run:action:confirm"}}},
+			{ID: "approval-b", Label: "Approval B", Type: NodeTypeWaitForAction, Actions: []ActionDefinition{{Name: "confirm-b", Label: "Confirm B", RequiredPermission: "run:action:confirm"}}},
+		},
+	}
+	workflowDefinition, err := NewWorkflowDefinition("ParallelActionsWorkflow", "v1", definition, func(ctx *WorkflowContext, _ string) ([]string, error) {
+		results := workflow.NewBufferedChannel(ctx.temporal, 2)
+		workflow.Go(ctx.temporal, func(childContext workflow.Context) {
+			child := *ctx
+			child.temporal = childContext
+			action, err := AwaitConfirmation(&child, "approval-a", "singleton", nil, time.Minute)
+			results.Send(childContext, struct {
+				Action string
+				Err    error
+			}{action.Action, err})
+		})
+		workflow.Go(ctx.temporal, func(childContext workflow.Context) {
+			child := *ctx
+			child.temporal = childContext
+			action, err := AwaitConfirmation(&child, "approval-b", "singleton", nil, time.Minute)
+			results.Send(childContext, struct {
+				Action string
+				Err    error
+			}{action.Action, err})
+		})
+		got := make([]string, 0, 2)
+		for range 2 {
+			var result struct {
+				Action string
+				Err    error
+			}
+			results.Receive(ctx.temporal, &result)
+			if result.Err != nil {
+				return nil, result.Err
+			}
+			got = append(got, result.Action)
+		}
+		return got, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(workflowDefinition.workflow)
+	nodeA := RuntimeNodeID("parallel-actions", "", "approval-a", "singleton")
+	nodeB := RuntimeNodeID("parallel-actions", "", "approval-b", "singleton")
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(ReservedActionSignal, ActionEnvelope{OperationID: "op-b", NodeID: nodeB, Action: "confirm-b"})
+		env.SignalWorkflow(ReservedActionSignal, ActionEnvelope{OperationID: "op-a", NodeID: nodeA, Action: "confirm-a"})
+	}, time.Second)
+	env.ExecuteWorkflow(workflowDefinition.workflow, "")
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	var result []string
+	if err := env.GetWorkflowResult(&result); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(result, ",") != "confirm-b,confirm-a" && strings.Join(result, ",") != "confirm-a,confirm-b" {
+		t.Fatalf("routed actions = %#v", result)
+	}
+}
+
+func TestActionPendingInboxIsBoundedAcrossNodeIDs(t *testing.T) {
+	definition := graphDefinition()
+	definition.Bounds.MaxRuntimeNodes = 2
+	graph, err := NewGraph(definition, "BoundedActionsWorkflow", "v1", time.Unix(1, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &WorkflowContext{graph: graph, pendingActions: map[string][]ActionEnvelope{}}
+
+	if !ctx.enqueuePendingAction(ActionEnvelope{OperationID: "op-a", NodeID: "node-a"}) {
+		t.Fatal("first pending action should be accepted")
+	}
+	if !ctx.enqueuePendingAction(ActionEnvelope{OperationID: "op-b", NodeID: "node-b"}) {
+		t.Fatal("second pending action should be accepted")
+	}
+	if ctx.enqueuePendingAction(ActionEnvelope{OperationID: "op-c", NodeID: "node-c"}) {
+		t.Fatal("pending actions across all node IDs must not exceed maxRuntimeNodes")
 	}
 }
 

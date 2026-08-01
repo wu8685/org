@@ -74,7 +74,11 @@ Run terminal state与run lease删除同一次commit；Cancel同样提交`cancele
 
 WorkflowContext维护deterministic action dispatcher/inbox。Reserved Signal只被一个dispatcher消费，再按stable runtime node ID路由；node尚未开始等待时可有界暂存。duplicate operation仍由operation ID去重。并发两个WaitForAction的Temporal test必须反向发送两个node action并证明无丢失、无串扰、replay稳定。
 
+dispatcher在Workflow runtime初始化时启动，是`org.sdk/action`的唯一consumer；每个waiting node只消费自己的内部channel。Signal早于node waiter时按node ID进入受`maxRuntimeNodes`约束的pending inbox，不能由其他node读取或丢弃。overflow保持有界，不扩大006的dynamic DAG资源边界；Gateway仍以operation ID负责delivery retry与结果reconcile。
+
 Start使用Workflow input schema，Signal/Query使用各自Operation input schema，复用受限JSON Schema validator；验证发生在quota/executor之前。schema本身在contract admission已验证。red tests记录fake executor/quota零调用。
+
+所有输入先解析并canonicalize为JSON，再按contract的受限schema子集验证；错误只返回安全的schema path/reason，不记录完整input。空input按`{}`处理以保持既有无参数Workflow/operation语义。验证成功后的canonical JSON才进入durable Invocation或executor。
 
 ## Repair stage 6：Audit与Sample completion（L、M）
 

@@ -33,6 +33,9 @@ type WorkflowContext struct {
 	temporal            workflow.Context
 	graph               *Graph
 	processedOperations map[string]ActionResult
+	actionChannels      map[string]workflow.Channel
+	pendingActions      map[string][]ActionEnvelope
+	pendingActionCount  int
 }
 
 type WorkflowDefinition[I, O any] struct {
@@ -57,12 +60,16 @@ func NewWorkflowDefinition[I, O any](name, version string, contract Definition, 
 		if err != nil {
 			return zero, err
 		}
-		runtimeContext := &WorkflowContext{temporal: ctx, graph: graph, processedOperations: map[string]ActionResult{}}
+		runtimeContext := &WorkflowContext{
+			temporal: ctx, graph: graph, processedOperations: map[string]ActionResult{},
+			actionChannels: map[string]workflow.Channel{}, pendingActions: map[string][]ActionEnvelope{},
+		}
 		if err := workflow.SetQueryHandler(ctx, ReservedProjectionQuery, func() (Projection, error) {
 			return graph.Snapshot(), nil
 		}); err != nil {
 			return zero, err
 		}
+		startActionDispatcher(runtimeContext)
 		output, runErr := run(runtimeContext, input)
 		if runErr != nil {
 			_ = graph.Fail("workflow-error", workflow.Now(ctx))
@@ -309,6 +316,66 @@ type ActionResult struct {
 	Node        NodeRef         `json:"node"`
 }
 
+func startActionDispatcher(ctx *WorkflowContext) {
+	workflow.Go(ctx.temporal, func(dispatchContext workflow.Context) {
+		signal := workflow.GetSignalChannel(dispatchContext, ReservedActionSignal)
+		for {
+			var envelope ActionEnvelope
+			canceled := false
+			selector := workflow.NewSelector(dispatchContext)
+			selector.AddReceive(signal, func(channel workflow.ReceiveChannel, _ bool) {
+				channel.Receive(dispatchContext, &envelope)
+			})
+			selector.AddReceive(dispatchContext.Done(), func(workflow.ReceiveChannel, bool) { canceled = true })
+			selector.Select(dispatchContext)
+			if canceled {
+				return
+			}
+			if envelope.OperationID == "" || envelope.NodeID == "" {
+				continue
+			}
+			if channel, ok := ctx.actionChannels[envelope.NodeID]; ok && channel.SendAsync(envelope) {
+				continue
+			}
+			ctx.enqueuePendingAction(envelope)
+		}
+	})
+}
+
+func (ctx *WorkflowContext) enqueuePendingAction(envelope ActionEnvelope) bool {
+	limit := ctx.graph.Definition.Bounds.MaxRuntimeNodes
+	if limit < 1 {
+		limit = 1
+	}
+	if ctx.pendingActionCount >= limit {
+		return false
+	}
+	ctx.pendingActions[envelope.NodeID] = append(ctx.pendingActions[envelope.NodeID], envelope)
+	ctx.pendingActionCount++
+	return true
+}
+
+func (ctx *WorkflowContext) actionChannel(nodeID string) workflow.Channel {
+	if channel, ok := ctx.actionChannels[nodeID]; ok {
+		return channel
+	}
+	capacity := ctx.graph.Definition.Bounds.MaxRuntimeNodes
+	if capacity < 1 {
+		capacity = 1
+	}
+	channel := workflow.NewBufferedChannel(ctx.temporal, capacity)
+	ctx.actionChannels[nodeID] = channel
+	pending := ctx.pendingActions[nodeID]
+	delete(ctx.pendingActions, nodeID)
+	ctx.pendingActionCount -= len(pending)
+	for _, envelope := range pending {
+		if !channel.SendAsync(envelope) {
+			ctx.enqueuePendingAction(envelope)
+		}
+	}
+	return channel
+}
+
 func AwaitConfirmation(ctx *WorkflowContext, templateID, occurrenceKey string, dependencies []NodeRef, timeout time.Duration) (ActionResult, error) {
 	return waitForAction(ctx, templateID, occurrenceKey, dependencies, timeout, func(json.RawMessage) error { return nil })
 }
@@ -337,7 +404,7 @@ func waitForAction(ctx *WorkflowContext, templateID, occurrenceKey string, depen
 		return ActionResult{}, err
 	}
 	template, _ := ctx.graph.Definition.template(templateID)
-	signal := workflow.GetSignalChannel(ctx.temporal, ReservedActionSignal)
+	signal := ctx.actionChannel(nodeID)
 	timer := workflow.NewTimer(ctx.temporal, timeout)
 	for {
 		var envelope ActionEnvelope
@@ -351,10 +418,12 @@ func waitForAction(ctx *WorkflowContext, templateID, occurrenceKey string, depen
 		selector.AddReceive(ctx.temporal.Done(), func(workflow.ReceiveChannel, bool) { canceled = true })
 		selector.Select(ctx.temporal)
 		if canceled {
+			delete(ctx.actionChannels, nodeID)
 			_ = ctx.graph.Transition(nodeID, NodeStatusCanceled, "workflow-canceled", workflow.Now(ctx.temporal))
 			return ActionResult{}, workflow.ErrCanceled
 		}
 		if timedOut {
+			delete(ctx.actionChannels, nodeID)
 			_ = ctx.graph.Transition(nodeID, NodeStatusTimedOut, "action-timeout", workflow.Now(ctx.temporal))
 			return ActionResult{}, ErrActionTimedOut
 		}
@@ -381,6 +450,7 @@ func waitForAction(ctx *WorkflowContext, templateID, occurrenceKey string, depen
 		if err := ctx.graph.Transition(nodeID, NodeStatusCompleted, "", workflow.Now(ctx.temporal)); err != nil {
 			return ActionResult{}, err
 		}
+		delete(ctx.actionChannels, nodeID)
 		return result, nil
 	}
 }

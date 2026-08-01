@@ -661,9 +661,18 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	if selected == nil {
 		return domain.Invocation{}, errors.New("selected Worker version is not ready")
 	}
-	if _, ok := selected.Metadata.Workflow(req.Workflow); !ok {
+	workflowContract, ok := selected.Metadata.Workflow(req.Workflow)
+	if !ok {
 		return domain.Invocation{}, fmt.Errorf("workflow %q is not declared", req.Workflow)
 	}
+	canonicalInput, err := canonicalJSON(req.Input)
+	if err != nil {
+		return domain.Invocation{}, fmt.Errorf("workflow input schema: %w", err)
+	}
+	if err := validateJSONSchema(workflowContract.InputSchema, canonicalInput); err != nil {
+		return domain.Invocation{}, fmt.Errorf("workflow input schema: %w", err)
+	}
+	req.Input = canonicalInput
 	invocationID := newID("inv")
 	if req.IdempotencyKey != "" {
 		sum := sha256.Sum256([]byte(tenant.ID + "\x00" + req.WorkerName + "\x00" + req.Workflow + "\x00" + req.IdempotencyKey))
@@ -1044,10 +1053,18 @@ func (c *ControlPlane) Signal(ctx context.Context, auth AuthenticatedContext, id
 	if err != nil {
 		return err
 	}
-	if !declaredOperation(contract.Signals, name) {
+	operation, ok := declaredOperation(contract.Signals, name)
+	if !ok {
 		return fmt.Errorf("signal %q is not declared", name)
 	}
-	return c.executor.Signal(ctx, inv, name, input)
+	canonicalInput, err := canonicalJSON(input)
+	if err != nil {
+		return fmt.Errorf("signal input schema: %w", err)
+	}
+	if err := validateJSONSchema(operation.InputSchema, canonicalInput); err != nil {
+		return fmt.Errorf("signal input schema: %w", err)
+	}
+	return c.executor.Signal(ctx, inv, name, canonicalInput)
 }
 
 func (c *ControlPlane) Query(ctx context.Context, auth AuthenticatedContext, id, name string, input []byte) (result []byte, err error) {
@@ -1064,10 +1081,18 @@ func (c *ControlPlane) Query(ctx context.Context, auth AuthenticatedContext, id,
 	if err != nil {
 		return nil, err
 	}
-	if !declaredOperation(contract.Queries, name) {
+	operation, ok := declaredOperation(contract.Queries, name)
+	if !ok {
 		return nil, fmt.Errorf("query %q is not declared", name)
 	}
-	return c.executor.Query(ctx, inv, name, input)
+	canonicalInput, err := canonicalJSON(input)
+	if err != nil {
+		return nil, fmt.Errorf("query input schema: %w", err)
+	}
+	if err := validateJSONSchema(operation.InputSchema, canonicalInput); err != nil {
+		return nil, fmt.Errorf("query input schema: %w", err)
+	}
+	return c.executor.Query(ctx, inv, name, canonicalInput)
 }
 
 func (c *ControlPlane) Cancel(ctx context.Context, auth AuthenticatedContext, id string) (err error) {
@@ -1263,13 +1288,13 @@ func decodeStrictRequest(reader io.Reader, target any) error {
 	return nil
 }
 
-func declaredOperation(operations []domain.Operation, name string) bool {
+func declaredOperation(operations []domain.Operation, name string) (domain.Operation, bool) {
 	for _, operation := range operations {
 		if operation.Name == name {
-			return true
+			return operation, true
 		}
 	}
-	return false
+	return domain.Operation{}, false
 }
 
 func newID(prefix string) string {

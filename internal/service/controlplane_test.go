@@ -874,6 +874,48 @@ func TestSignalAndQueryMustBeDeclared(t *testing.T) {
 	}
 }
 
+func TestWorkflowStartSchemaRejectsBeforeQuotaAndTemporal(t *testing.T) {
+	req := workerVersionRequest("v1")
+	req.Metadata.Workflows[0].InputSchema = json.RawMessage(`{"type":"object","required":["order"],"properties":{"order":{"type":"string"}},"additionalProperties":false}`)
+	executor := &fakeExecutor{}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, &fakeCluster{}, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, req); err != nil {
+		t.Fatal(err)
+	}
+	leasesBefore := len(cp.store.QuotaLeases(auth.TenantID))
+	if _, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)}); err == nil || !strings.Contains(err.Error(), "input schema") {
+		t.Fatalf("invalid start schema error = %v", err)
+	}
+	if len(executor.starts) != 0 || len(cp.store.QuotaLeases(auth.TenantID)) != leasesBefore || len(cp.store.Invocations(auth.TenantID)) != 0 {
+		t.Fatalf("invalid start reached mutation/adapters: starts=%#v leases=%#v invocations=%#v", executor.starts, cp.store.QuotaLeases(auth.TenantID), cp.store.Invocations(auth.TenantID))
+	}
+}
+
+func TestSignalAndQuerySchemasRejectBeforeExecutor(t *testing.T) {
+	req := workerVersionRequest("v1")
+	schema := json.RawMessage(`{"type":"object","required":["value"],"properties":{"value":{"type":"string"}},"additionalProperties":false}`)
+	req.Metadata.Workflows[0].Signals = []domain.Operation{{Name: "approve", InputSchema: schema}}
+	req.Metadata.Workflows[0].Queries = []domain.Operation{{Name: "summary", InputSchema: schema}}
+	executor := &fakeExecutor{}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, &fakeCluster{}, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, req); err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.Signal(context.Background(), auth, invocation.ID, "approve", []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "input schema") {
+		t.Fatalf("invalid signal schema error = %v", err)
+	}
+	if _, err := cp.Query(context.Background(), auth, invocation.ID, "summary", []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "input schema") {
+		t.Fatalf("invalid query schema error = %v", err)
+	}
+	if len(executor.signals) != 0 || executor.lastQuery != "" {
+		t.Fatalf("invalid operation input reached executor: signals=%#v query=%q", executor.signals, executor.lastQuery)
+	}
+}
+
 type fakeCluster struct {
 	calls     []string
 	bootstrap BootstrapDeployment
