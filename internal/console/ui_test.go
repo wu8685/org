@@ -49,11 +49,14 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 		`data-worker-error`, `aria-describedby="worker-name-help worker-name-error"`,
 		`<dialog class="dialog" data-worker-dialog`, `<form method="dialog" class="dialog-head">`,
 		`<form class="form-grid" data-worker-form>`, `<div class="form-actions">`, `data-dialog-close`,
-		`app.css`, `app.js`,
+		`app.css`, `yaml-renderer.js`, `app.js`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("shell missing %q: %s", want, body)
 		}
+	}
+	if strings.Index(body, `yaml-renderer.js`) > strings.Index(body, `app.js`) {
+		t.Fatal("YAML renderer must load before the Console application")
 	}
 	for _, forbidden := range []string{"dag-branch-a", "approval-node", "finish-node", "contract-textarea", "routine-modal", `type="file"`, `name="manifest"`, `name="repository"`, `name="branch"`, `name="commit"`, `name="ciReference"`} {
 		if strings.Contains(body, forbidden) {
@@ -68,8 +71,9 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 		path  string
 		wants []string
 	}{
-		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", "prefers-reduced-motion"}},
-		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission"}},
+		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", "prefers-reduced-motion"}},
+		{"/assets/yaml-renderer.js", []string{"YAML display unavailable", "MAX_DEPTH", "MAX_OUTPUT", "Object.keys(value).sort()", "module.exports"}},
+		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`}},
 	}
 	for _, check := range checks {
 		response := httptest.NewRecorder()
@@ -96,6 +100,11 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 			for _, forbidden := range []string{`window.prompt("Worker name")`, "elements.repository", "elements.branch", "elements.commit", "elements.ciReference", "source:"} {
 				if strings.Contains(response.Body.String(), forbidden) {
 					t.Fatalf("GET %s contains obsolete public publish/Worker input %q", check.path, forbidden)
+				}
+			}
+			for _, forbidden := range []string{`JSON.stringify(version.versionConfig`, `JSON.stringify(version.contract`, `JSON.stringify(workflow.inputSchema`, `.innerHTML`} {
+				if strings.Contains(response.Body.String(), forbidden) {
+					t.Fatalf("GET %s contains unsafe or obsolete JSON display %q", check.path, forbidden)
 				}
 			}
 		}

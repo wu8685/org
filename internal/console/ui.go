@@ -56,7 +56,7 @@ func serveAsset(response http.ResponseWriter, request *http.Request) bool {
 		return false
 	}
 	name := strings.TrimPrefix(request.URL.Path, "/assets/")
-	if name != "app.css" && name != "app.js" {
+	if name != "app.css" && name != "yaml-renderer.js" && name != "app.js" {
 		return false
 	}
 	contents, err := fs.ReadFile(webFiles, "web/"+name)

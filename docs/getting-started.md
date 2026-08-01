@@ -124,7 +124,7 @@ IMAGE_DIGEST=org.local/hello-worker@sha256:<digest>
 6. runtime 填写 `100m` CPU 和 `128Mi` memory。
 7. 提交发布。Console 不要求 repository、branch、commit、CI reference 或 manifest；可信审计 metadata 由服务端记录。
 
-候选 Pod 启动后，Org SDK 会从 typed Definition 在内存中生成 contract 并自动注册。Console 只读展示 contract，不要求上传 manifest。
+候选 Pod 启动后，Org SDK 会从 typed Definition 在内存中生成 contract 并自动注册。Console 只读展示 contract，不要求上传 manifest。为了便于阅读和复制，Console 将contract、input schema和version config显示为稳定排序的YAML；HTTP/JSON API、SDK canonical JSON与digest不变，Trigger/Action输入仍由schema表单生成JSON。
 
 ### 检查点
 

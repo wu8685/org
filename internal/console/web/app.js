@@ -7,6 +7,7 @@
   const notice = document.querySelector("[data-notice]");
   const actions = document.querySelector("[data-heading-actions]");
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const yamlRenderer = window.OrgYAML;
   const segments = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   let lastRunETag = "";
   let actionContext = null;
@@ -81,6 +82,34 @@
     entries.forEach(([key, value]) => list.append(el("dt", {text: key}), value instanceof Node ? el("dd", {}, value) : el("dd", {text: value})));
     return list;
   };
+
+  function yamlView(value, label) {
+    const rendered = yamlRenderer.render(value);
+    const view = el("div", {class: "yaml-view", "data-yaml-view": ""});
+    const toolbar = el("div", {class: "yaml-toolbar"});
+    const format = el("span", {class: "yaml-format", text: "YAML"});
+    const copyStatus = el("span", {class: "copy-status"});
+    copyStatus.setAttribute("aria-live", "polite");
+    const copy = button("复制 YAML", async () => {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+        await navigator.clipboard.writeText(rendered.text);
+        copyStatus.textContent = "已复制";
+      } catch (_) {
+        copyStatus.textContent = "复制失败，请手动选择";
+      }
+    }, true);
+    copy.setAttribute("aria-label", `复制 ${label} YAML`);
+    if (!rendered.ok) {
+      copy.disabled = true;
+      copyStatus.textContent = "无法安全显示；请查看 API 原始 JSON";
+    }
+    const code = el("pre", {class: "contract-view yaml-code", text: rendered.text, tabindex: 0});
+    code.setAttribute("aria-label", `${label} YAML`);
+    toolbar.append(format, copyStatus, copy);
+    view.append(toolbar, code);
+    return view;
+  }
 
   function buildSchemaFields(schema, fieldset, jsonTextarea) {
     clear(fieldset);
@@ -209,8 +238,10 @@
         ["SDK registration", status(version.registration?.status || "awaiting-registration")], ["Pinned probe", status(version.probe?.status || "pending")], ["Manifest digest", mono(version.contractVerification.manifestDigest || "等待 Worker 注册")], ["SDK", mono(version.contractVerification.sdkModuleVersion || "—")], ["Runtime protocol", mono(version.contractVerification.runtimeProtocolVersion || "—")],
       ])]),
     ]));
-    content.append(section("Runtime config", card([definition([["CPU", version.runtime.cpu], ["Memory", version.runtime.memory]]), el("pre", {class: "contract-view", text: JSON.stringify(version.versionConfig || {}, null, 2)})])));
-    content.append(section("Read-only SDK contract", el("pre", {class: "contract-view", "data-contract-readonly": "", text: JSON.stringify(version.contract, null, 2)})));
+    content.append(section("Runtime config", card([definition([["CPU", version.runtime.cpu], ["Memory", version.runtime.memory]]), yamlView(version.versionConfig ?? {}, "Version config")])));
+    const contractView = yamlView(version.contract ?? null, "Read-only SDK contract");
+    contractView.setAttribute("data-contract-readonly", "");
+    content.append(section("Read-only SDK contract", contractView));
   }
 
   async function renderWorkflows() {
@@ -231,7 +262,9 @@
     clear(content); clear(actions);
     actions.append(button("启动 Run", () => openTrigger(workerName, versionName, workflowName, workflow)));
     content.append(card(definition([["Worker", workerName], ["WorkerVersion", mono(versionName)], ["Release description", workerVersion.description], ["Versioning", workflow.versioningBehavior]])));
-    content.append(section("Read-only input contract", el("pre", {class: "contract-view", "data-contract-readonly": "", text: JSON.stringify(workflow.inputSchema || {}, null, 2)})));
+    const inputContract = yamlView(workflow.inputSchema ?? {}, "Read-only input contract");
+    inputContract.setAttribute("data-contract-readonly", "");
+    content.append(section("Read-only input contract", inputContract));
   }
 
   async function renderRuns() {

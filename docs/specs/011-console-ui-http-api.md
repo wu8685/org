@@ -509,6 +509,17 @@ UI状态语义：
 - 调用者显式提供`ORG_REGISTRY_ALLOWLIST`时必须完整覆盖该默认值；不得把`org.local`隐式加入production binary的通用配置默认值。
 - Getting Started继续显示可复制的显式环境命令，同时说明直接`make console-dev`采用上述local-dev默认值。registry校验仍只接受完整immutable digest，不因此接受tag。
 
+### Console structured data 的 YAML 展示
+
+本节只改变Console presentation，不改变HTTP/JSON API、Org SDK canonical JSON bytes/digest、bootstrap contract binding、schema validation或持久化格式。
+
+- 所有只读structured-data code view统一显示YAML：WorkerVersion的version config、Read-only SDK contract，以及Workflow的read-only input contract/schema。后续新增的structured diagnostics必须复用同一renderer。Runtime DAG、状态卡片和字段化diagnostics继续使用其语义组件，不为“统一”而退化成文本块。
+- publish的advanced`versionConfig`、Trigger/Action的raw fallback input仍是JSON输入，因为服务端API接收JSON；Workflow与Action表单继续由read-only schema生成字段。不得让用户编辑YAML来替代schema validation，也不得把YAML送入publish/run/action API。
+- renderer只接受JSON data model：object、array、string、finite number、boolean与null。object key按确定性词法顺序排序，使用2-space indentation；空object/array分别显示`{}`/`[]`。unsafe key与所有string使用YAML兼容的quoted scalar，嵌套array/object使用block style。
+- renderer必须有depth/output bounds，并在cycle、non-finite number、unsupported value、getter异常或超限时返回固定、安全、无内部细节的fallback。不得部分渲染后声称成功。
+- DOM只用`textContent`写入renderer结果，禁止`innerHTML`；这样原始`<script>`、HTML attribute或YAML tag样式字符串只作为文本显示。copy按钮复制原始YAML文本，不复制HTML entity；按钮有明确accessible label，相邻`aria-live`状态报告成功/失败，失败时保留可手动选择的`<pre>`。
+- display view标注`YAML`且可滚动、键盘聚焦和复制。空值显示`null`而非空白；错误fallback仍保留view label并标记不可复制。
+
 ## 待确认的实现取舍
 
 四项产品契约已由用户确认；开始实现前仍建议确认以下实现层取舍：
