@@ -16,16 +16,18 @@
 cd samples/hello # 或另一个Sample目录
 make test
 make verify
-make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 ```
 
 使用自己的registry时：
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make push \
   IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 两条image路径都输出`IMAGE_DIGEST=<repository>@sha256:...`。在org Console创建对应Worker并发布Version，候选Pod会通过Org SDK自动注册contract；用户不提供contract文件。

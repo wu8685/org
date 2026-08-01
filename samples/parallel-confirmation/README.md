@@ -33,22 +33,25 @@ make verify
 本地build：
 
 ```sh
-make image VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+make image VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 ```
 
 push自己的registry：
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make push \
   IMAGE_REPOSITORY=registry.example.com/team/parallel-confirmation-worker \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 或加载本地`kind-org`：
 
 ```sh
-make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 ```
 
 成功后复制`IMAGE_DIGEST=<repository>@sha256:...`。当前目录就是完整Docker build context；不需要org根源码或根Makefile。
@@ -57,7 +60,7 @@ make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
 
 1. 在Console创建Worker `parallel-confirmation-worker`；
 2. 用上一步digest发布Version，并等待SDK registration、poller与probe；
-3. 触发`ParallelConfirmationWorkflow`；
+3. 触发`ParallelConfirmationWorkflow`，input为`{"subject":"release notes"}`；
 4. Run detail先显示`approval-gate = waiting-for-user`和`confirm` action；
 5. 提交确认后，观察两个running branch、join与finalize依次完成。
 

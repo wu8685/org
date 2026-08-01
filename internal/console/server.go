@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/wu8685/org/internal/domain"
@@ -55,6 +55,9 @@ type ControlPlane interface {
 	ListRunActions(context.Context, service.AuthenticatedContext, string) ([]domain.ActionOperation, error)
 	GetOverview(context.Context, service.AuthenticatedContext) (service.Overview, error)
 	PublishVersion(context.Context, service.AuthenticatedContext, domain.WorkerVersionRequest) (domain.WorkerVersion, error)
+	ReservePublishOperation(context.Context, service.AuthenticatedContext, service.PublishOperationReservation) (domain.PublishOperation, bool, error)
+	CompletePublishOperation(context.Context, service.AuthenticatedContext, string, domain.WorkerVersion, string, string) (domain.PublishOperation, error)
+	GetPublishOperation(context.Context, service.AuthenticatedContext, string) (domain.PublishOperation, error)
 	UpdateWorkerVersionDescription(context.Context, service.AuthenticatedContext, string, string, int64, string) (domain.WorkerVersion, error)
 	Start(context.Context, service.AuthenticatedContext, service.StartRequest) (domain.Invocation, error)
 	Cancel(context.Context, service.AuthenticatedContext, string) error
@@ -72,8 +75,6 @@ type server struct {
 	authenticator  Authenticator
 	controlPlane   ControlPlane
 	publishTimeout time.Duration
-	operationMu    sync.RWMutex
-	operations     map[string]publishOperation
 }
 
 func New(config Config) http.Handler {
@@ -81,7 +82,7 @@ func New(config Config) http.Handler {
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	return &server{authenticator: config.Authenticator, controlPlane: config.ControlPlane, publishTimeout: timeout, operations: map[string]publishOperation{}}
+	return &server{authenticator: config.Authenticator, controlPlane: config.ControlPlane, publishTimeout: timeout}
 }
 
 func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -152,17 +153,6 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 	}
 }
 
-type publishOperation struct {
-	ID            string
-	TenantID      string
-	State         string
-	WorkerVersion *domain.WorkerVersion
-	ErrorCode     string
-	ErrorMessage  string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-}
-
 type publishVersionInput struct {
 	Version       string                  `json:"version"`
 	Description   string                  `json:"description"`
@@ -184,50 +174,59 @@ func (s *server) publishVersion(response http.ResponseWriter, request *http.Requ
 		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
 		return
 	}
+	canonicalVersionConfig, err := canonicalJSON(input.VersionConfig)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", "versionConfig must be valid JSON", requestID)
+		return
+	}
+	input.VersionConfig = canonicalVersionConfig
 	command := domain.WorkerVersionRequest{
 		WorkerName: workerName, Version: input.Version, Description: input.Description, Image: input.Image,
 		VersionConfig: input.VersionConfig,
 		Runtime:       domain.RuntimeSpec{CPU: input.Runtime.CPU, Memory: input.Runtime.Memory, Environment: input.Runtime.Environment}, Source: input.Source,
 	}
-	now := time.Now().UTC()
-	operation := publishOperation{ID: "pub-" + strings.TrimPrefix(newRequestID(), "req-"), TenantID: identity.Auth.TenantID, State: "running", CreatedAt: now, UpdatedAt: now}
-	s.operationMu.Lock()
-	s.operations[operation.ID] = operation
-	s.operationMu.Unlock()
+	payloadDigest, err := publishPayloadDigest(workerName, input)
+	if err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", "publish request cannot be canonicalized", requestID)
+		return
+	}
+	operation, created, err := s.controlPlane.ReservePublishOperation(request.Context(), identity.Auth, service.PublishOperationReservation{
+		IdempotencyKey: request.Header.Get("Idempotency-Key"), PayloadDigest: payloadDigest,
+		WorkerName: workerName, Version: input.Version,
+	})
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
 	auth := identity.Auth
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.publishTimeout)
-		defer cancel()
-		version, err := s.controlPlane.PublishVersion(ctx, auth, command)
-		s.operationMu.Lock()
-		defer s.operationMu.Unlock()
-		current := s.operations[operation.ID]
-		current.UpdatedAt = time.Now().UTC()
-		if err != nil {
-			_, current.ErrorCode, current.ErrorMessage = httpError(err)
-			current.State = "failed"
-		} else {
-			current.State, current.WorkerVersion = "succeeded", &version
-		}
-		s.operations[operation.ID] = current
-	}()
+	if created {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), s.publishTimeout)
+			defer cancel()
+			version, publishErr := s.controlPlane.PublishVersion(ctx, auth, command)
+			if publishErr != nil {
+				_, code, message := httpError(publishErr)
+				_, _ = s.controlPlane.CompletePublishOperation(context.Background(), auth, operation.ID, domain.WorkerVersion{}, code, message)
+				return
+			}
+			_, _ = s.controlPlane.CompletePublishOperation(context.Background(), auth, operation.ID, version, "", "")
+		}()
+	}
 	location := "/api/v1/operations/" + operation.ID
 	response.Header().Set("Location", location)
 	writeJSON(response, http.StatusAccepted, map[string]any{"requestId": requestID, "operation": operationResponse(operation, location)})
 }
 
 func (s *server) getPublishOperation(response http.ResponseWriter, requestID string, identity Identity, operationID string) {
-	s.operationMu.RLock()
-	operation, ok := s.operations[operationID]
-	s.operationMu.RUnlock()
-	if !ok || operation.TenantID != identity.Auth.TenantID {
-		writeAPIError(response, http.StatusNotFound, "not_found", "Resource not found", requestID)
+	operation, err := s.controlPlane.GetPublishOperation(context.Background(), identity.Auth, operationID)
+	if err != nil {
+		writeError(response, requestID, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "operation": operationResponse(operation, "/api/v1/operations/"+operation.ID)})
 }
 
-func operationResponse(operation publishOperation, location string) map[string]any {
+func operationResponse(operation domain.PublishOperation, location string) map[string]any {
 	response := map[string]any{
 		"id": operation.ID, "state": operation.State, "statusUrl": location,
 		"createdAt": operation.CreatedAt, "updatedAt": operation.UpdatedAt,
@@ -238,7 +237,42 @@ func operationResponse(operation publishOperation, location string) map[string]a
 	if operation.ErrorCode != "" {
 		response["error"] = map[string]string{"code": operation.ErrorCode, "message": operation.ErrorMessage}
 	}
+	if !operation.ExpiresAt.IsZero() {
+		response["expiresAt"] = operation.ExpiresAt
+	}
 	return response
+}
+
+func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	canonical, err := json.Marshal(value)
+	return json.RawMessage(canonical), err
+}
+
+func publishPayloadDigest(workerName string, input publishVersionInput) (string, error) {
+	payload := struct {
+		WorkerName    string                  `json:"workerName"`
+		Version       string                  `json:"version"`
+		Description   string                  `json:"description"`
+		Image         string                  `json:"image"`
+		VersionConfig json.RawMessage         `json:"versionConfig,omitempty"`
+		Runtime       publishRuntime          `json:"runtime"`
+		Source        domain.SourceProvenance `json:"source"`
+	}{workerName, input.Version, input.Description, input.Image, input.VersionConfig, input.Runtime, input.Source}
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 func (s *server) updateDescription(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, workerName, version string) {

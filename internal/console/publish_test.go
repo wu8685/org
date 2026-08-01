@@ -1,6 +1,7 @@
 package console
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,16 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
 	published := make(chan domain.WorkerVersionRequest, 1)
 	backend := &stubControlPlane{published: published, version: consoleVersion(time.Now().UTC())}
 	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: backend})
+	sessionResponse := httptest.NewRecorder()
+	handler.ServeHTTP(sessionResponse, httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
+	var session struct {
+		Session struct {
+			CSRFToken string `json:"csrfToken"`
+		} `json:"session"`
+	}
+	if sessionResponse.Code != http.StatusOK || json.Unmarshal(sessionResponse.Body.Bytes(), &session) != nil || session.Session.CSRFToken == "" {
+		t.Fatalf("session status=%d body=%s", sessionResponse.Code, sessionResponse.Body.String())
+	}
 	body := `{
       "version":"v1",
       "description":"First release",
@@ -24,7 +35,8 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
     }`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/hello-worker/versions", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-CSRF-Token", "csrf-a")
+	request.Header.Set("X-CSRF-Token", session.Session.CSRFToken)
+	request.Header.Set("Idempotency-Key", "publish-v1")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || response.Header().Get("Location") == "" {
@@ -52,6 +64,95 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+func TestPublishIdempotencyReturnsSameOperationAndRunsBackendOnce(t *testing.T) {
+	published := make(chan domain.WorkerVersionRequest, 2)
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{published: published}})
+	body := publishBody(`{"region":"local","nested":{"b":2,"a":1}}`)
+
+	first := publishRequest(body, "publish-same")
+	firstResponse := httptest.NewRecorder()
+	handler.ServeHTTP(firstResponse, first)
+	secondBody := strings.Replace(body, `"versionConfig":{"nested":{"a":1,"b":2},"region":"local"}`, `"versionConfig": { "region": "local", "nested": { "b": 2, "a": 1 } }`, 1)
+	second := publishRequest(secondBody, "publish-same")
+	secondResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondResponse, second)
+
+	if firstResponse.Code != http.StatusAccepted || secondResponse.Code != http.StatusAccepted || firstResponse.Header().Get("Location") == "" || firstResponse.Header().Get("Location") != secondResponse.Header().Get("Location") {
+		t.Fatalf("first=%d/%q second=%d/%q bodies=%s / %s", firstResponse.Code, firstResponse.Header().Get("Location"), secondResponse.Code, secondResponse.Header().Get("Location"), firstResponse.Body.String(), secondResponse.Body.String())
+	}
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		t.Fatal("first publish did not reach backend")
+	}
+	select {
+	case duplicate := <-published:
+		t.Fatalf("duplicate reached backend: %#v", duplicate)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func TestPublishIdempotencyRejectsConflictingPayload(t *testing.T) {
+	published := make(chan domain.WorkerVersionRequest, 2)
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{published: published}})
+	firstResponse := httptest.NewRecorder()
+	handler.ServeHTTP(firstResponse, publishRequest(publishBody(`{"region":"local"}`), "publish-conflict"))
+	conflictResponse := httptest.NewRecorder()
+	handler.ServeHTTP(conflictResponse, publishRequest(strings.Replace(publishBody(`{"region":"local"}`), "First release", "Changed release", 1), "publish-conflict"))
+	if firstResponse.Code != http.StatusAccepted || conflictResponse.Code != http.StatusConflict || !strings.Contains(conflictResponse.Body.String(), `"code":"conflict"`) {
+		t.Fatalf("first=%d conflict=%d body=%s", firstResponse.Code, conflictResponse.Code, conflictResponse.Body.String())
+	}
+	select {
+	case <-published:
+	case <-time.After(time.Second):
+		t.Fatal("first publish did not reach backend")
+	}
+	select {
+	case duplicate := <-published:
+		t.Fatalf("conflicting publish reached backend: %#v", duplicate)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func TestPublishRequiresIdempotencyKey(t *testing.T) {
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
+	request := publishRequest(publishBody(`{}`), "")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "Idempotency-Key") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func publishRequest(body, key string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/hello-worker/versions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", "csrf-a")
+	if key != "" {
+		request.Header.Set("Idempotency-Key", key)
+	}
+	return request
+}
+
+func publishBody(versionConfig string) string {
+	var config any
+	if err := json.Unmarshal([]byte(versionConfig), &config); err != nil {
+		panic(err)
+	}
+	value := map[string]any{
+		"version": "v1", "description": "First release",
+		"image":         "registry.example.com/hello@sha256:" + strings.Repeat("a", 64),
+		"runtime":       map[string]any{"cpu": "100m", "memory": "128Mi", "environment": []any{}},
+		"source":        map[string]any{"repository": "https://example.com/repo", "branch": "main", "commit": "cccccccccccc", "ciReference": "ci-1"},
+		"versionConfig": config,
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
 }
 
 func TestPublishRejectsEditableContractAliasesAndTenantFields(t *testing.T) {

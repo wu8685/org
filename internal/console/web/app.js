@@ -304,7 +304,14 @@
   const publishDialog = document.querySelector("[data-publish-dialog]");
   const publishForm = document.querySelector("[data-publish-form]");
   let publishWorker = "";
-  function openPublish(workerName) { publishWorker = workerName; publishDialog.showModal(); publishForm.elements.version.focus(); }
+  let publishOperationKey = "";
+  function openPublish(workerName) {
+    publishWorker = workerName;
+    publishOperationKey = crypto.randomUUID();
+    publishDialog.showModal();
+    publishForm.elements.version.focus();
+  }
+  publishForm.addEventListener("input", () => { publishOperationKey = crypto.randomUUID(); });
   publishForm.addEventListener("submit", async event => {
     event.preventDefault();
     try {
@@ -313,7 +320,11 @@
         versionConfig: JSON.parse(publishForm.elements.versionConfig.value), runtime: {cpu: publishForm.elements.cpu.value, memory: publishForm.elements.memory.value},
         source: {repository: publishForm.elements.repository.value, branch: publishForm.elements.branch.value, commit: publishForm.elements.commit.value, ciReference: publishForm.elements.ciReference.value},
       };
-      const result = await api(`/api/v1/workers/${encodeURIComponent(publishWorker)}/versions`, {method: "POST", body: JSON.stringify(bodyValue)});
+      if (!publishOperationKey) publishOperationKey = crypto.randomUUID();
+      const result = await api(`/api/v1/workers/${encodeURIComponent(publishWorker)}/versions`, {
+        method: "POST", headers: {"Idempotency-Key": publishOperationKey}, body: JSON.stringify(bodyValue),
+      });
+      publishOperationKey = "";
       publishDialog.close(); showNotice(`发布已受理：${result.operation.id}`, true); pollPublish(result.operation.statusUrl);
     } catch (error) { handleError(error); }
   });

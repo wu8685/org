@@ -166,6 +166,18 @@ Location: /api/v1/operations/pub-...
 
 相同 publish idempotency key + canonical payload 返回同一 pending release/operation；同 key 不同 payload 返回 conflict。相同 Tenant + Worker + version 已存在时，不得创建第二个 release 或替换其 contract。
 
+### Approved clarification: publish idempotency ledger
+
+本段澄清既有契约，不改变产品边界：
+
+- `Idempotency-Key`是publish必填header，必须为1–200个visible ASCII字符（`!`–`~`，不含空格）；不得写入log或Audit原文，ledger只保存其hash。
+- reservation作用域是authenticated `{tenantID, principalID, keyHash}`。同Tenant的另一principal或另一Tenant使用同一header值，不共享operation。
+- canonical payload digest包含route中的`workerName`以及规范化后的version、description、immutable image、versionConfig、runtime与source；JSON object字段顺序和无意义空白不影响digest。CSRF token、request ID和credential不进入digest。
+- reservation必须在启动异步publish前durable保存并原子判定：同scope + 同digest返回原`202`、`Location`和operation，不再次调用publish/deploy；同scope + 不同digest返回`409 conflict`。
+- new、replay与payload conflict都写Tenant-scoped Audit，只记录operation ID、payload digest与idempotency key hash等非秘密引用。
+- terminal reservation默认保留24小时并可配置；running reservation不因retention到期而回收。terminal记录过期后可lazy cleanup并允许key重新reservation，但相同Worker/version仍受immutable release conflict约束。
+- process restart后从control-plane durable store恢复reservation与operation read model；浏览器或Console内存不是idempotency事实来源。
+
 ## Pending release 与 server-derived binding
 
 org 接收 publish 后，在任何 Pod 启动前冻结：

@@ -31,9 +31,10 @@ make verify
 ## 构建本地image
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make image \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 Docker build context只有当前repository。命令输出可读tag；发布WorkerVersion仍必须使用immutable digest。
@@ -43,10 +44,11 @@ Docker build context只有当前repository。命令输出可读tag；发布Worke
 先用Docker完成registry login，再运行：
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make push \
   IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 成功后输出：
@@ -62,9 +64,10 @@ IMAGE_DIGEST=registry.example.com/team/hello-worker@sha256:<digest>
 已有`kind-org`时：
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make kind-load \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 它会构建、加载image并输出`IMAGE_DIGEST=org.local/hello-worker@sha256:...`。

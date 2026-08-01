@@ -31,22 +31,25 @@ make verify
 ## Build、push或kind-load
 
 ```sh
-make image VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+make image VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 ```
 
 push自己的registry：
 
 ```sh
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
 make push \
   IMAGE_REPOSITORY=registry.example.com/team/dynamic-decision-worker \
   VERSION=2026.08.1 \
-  COMMIT=$(git rev-parse --short=12 HEAD)
+  COMMIT="$SOURCE_REVISION"
 ```
 
 或加载本地`kind-org`：
 
 ```sh
-make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
+SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 ```
 
 成功后复制`IMAGE_DIGEST=<repository>@sha256:...`。构建只使用当前repository；org私有源码不是前置条件。

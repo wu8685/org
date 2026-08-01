@@ -6,8 +6,18 @@ Publishing connects an immutable Worker image to an existing logical Worker. The
 
 ## Request
 
+先在保持同一authenticated session（相同cookie或Authorization）的情况下读取CSRF token：
+
+```http
+GET /api/v1/session
+Accept: application/json
+```
+
+从响应的`session.csrfToken`取得值。随后使用同一authenticated session发布：
+
 ```http
 POST /api/v1/workers/{workerName}/versions
+X-CSRF-Token: <session.csrfToken>
 Idempotency-Key: publish-2026-08-1
 Content-Type: application/json
 ```
@@ -26,6 +36,8 @@ Use [`examples/publish-worker-version.json`](examples/publish-worker-version.jso
 The Worker name comes from the URL. Tenant comes from authentication. Do not send Tenant identity, Worker name, `scope`, platform routing, credentials, contract, metadata or projection fields in the body.
 
 Mutable tags and `tag@digest` are rejected. org does not build or push the image for you.
+
+`Idempotency-Key`必须是1–200个visible ASCII字符（`!`–`~`，不含空格）。相同Tenant、principal、key与canonical payload返回同一operation；同一scope下复用key但改变payload返回`409 conflict`。JSON object字段顺序和无意义空白不改变canonical payload。terminal reservation默认保留24小时；不要把credential或敏感业务值放进key。
 
 ## Response and verification
 

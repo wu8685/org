@@ -58,12 +58,12 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 				}
 			}
 			readme := read(t, filepath.Join(dir, "README.md"))
-			for _, want := range []string{"make test", "make push", "make kind-load", "IMAGE_DIGEST", "自动注册", "平台注入"} {
+			for _, want := range []string{"make test", "make push", "make kind-load", "IMAGE_DIGEST", "自动注册", "平台注入", "SOURCE_REVISION=abcdef1", `COMMIT="$SOURCE_REVISION"`} {
 				if !strings.Contains(readme, want) {
 					t.Errorf("README missing %q", want)
 				}
 			}
-			for _, forbidden := range []string{"../../docs", "make sample-test", "make parallel-sample", "make dynamic-sample", "manifest", "Task Queue", "Build ID", "TEMPORAL_", "config/release.example.json"} {
+			for _, forbidden := range []string{"../../docs", "make sample-test", "make parallel-sample", "make dynamic-sample", "manifest", "Task Queue", "Build ID", "TEMPORAL_", "config/release.example.json", "git rev-parse"} {
 				if strings.Contains(readme, forbidden) {
 					t.Errorf("README retains repository/platform dependency %q", forbidden)
 				}
@@ -180,7 +180,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	files := map[string][]string{
 		"README.md":                          {"Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/getting-started.md", "docs/architecture/overview.md", "samples/README.md"},
 		"docs/getting-started.md":            {"kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "api/publish-worker-version.md"},
-		"docs/api/publish-worker-version.md": {"POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "source"},
+		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "source"},
 		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
 		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
 	}
@@ -191,6 +191,14 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 				t.Errorf("%s missing %q", relative, want)
 			}
 		}
+	}
+	sampleOverview := read(t, filepath.Join(root, "samples", "README.md"))
+	if strings.Contains(sampleOverview, "git rev-parse") || !strings.Contains(sampleOverview, "SOURCE_REVISION=abcdef1") || !strings.Contains(sampleOverview, `COMMIT="$SOURCE_REVISION"`) {
+		t.Errorf("samples/README.md must support copied repositories without Git metadata")
+	}
+	parallel := read(t, filepath.Join(root, "samples", "parallel-confirmation", "README.md"))
+	if !strings.Contains(parallel, `{"subject":"release notes"}`) {
+		t.Errorf("parallel-confirmation README must include required Workflow input")
 	}
 }
 

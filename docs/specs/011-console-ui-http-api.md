@@ -244,6 +244,7 @@ UI可编辑字段：
 - manifest不包含`scope`、Tenant、重复Worker name、version description或version config。
 - `description`属于WorkerVersion且创建必填；PATCH只改变description和revision，不能改变image、runtime、manifest、source或Temporal Build ID。
 - org不build/push image；只接受allowlisted registry中的`repository@sha256:<64 lowercase hex>` platform-specific digest。mutable tag、`tag@digest`、multi-arch index digest、observed image mismatch或probe mismatch发布失败。
+- publish必须携带`X-CSRF-Token`与`Idempotency-Key`。CSRF token从同一认证session下的`GET /api/v1/session`读取；publish idempotency ledger及24小时默认retention以012的Approved clarification为准。
 
 实现复用现有domain contract；`versionConfig`持久化与artifact ingestion若尚缺行为，必须先补独立测试，再扩展domain。UI不得先以local-only字段假装保存成功。
 

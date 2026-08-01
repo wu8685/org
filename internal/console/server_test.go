@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
@@ -42,6 +44,9 @@ type stubControlPlane struct {
 	actionResult   domain.ActionOperation
 	actionErr      error
 	err            error
+	publishMu      sync.Mutex
+	publishByScope map[string]domain.PublishOperation
+	publishByID    map[string]domain.PublishOperation
 }
 
 func (c *stubControlPlane) CreateWorker(_ context.Context, _ service.AuthenticatedContext, request service.CreateWorkerRequest) (domain.Worker, error) {
@@ -91,6 +96,62 @@ func (c *stubControlPlane) PublishVersion(_ context.Context, _ service.Authentic
 		result = domain.WorkerVersion{WorkerName: request.WorkerName, Version: request.Version, Description: request.Description, Revision: 1, VersionConfig: request.VersionConfig, State: domain.WorkerVersionReady}
 	}
 	return result, nil
+}
+func (c *stubControlPlane) ReservePublishOperation(_ context.Context, auth service.AuthenticatedContext, request service.PublishOperationReservation) (domain.PublishOperation, bool, error) {
+	if request.IdempotencyKey == "" {
+		return domain.PublishOperation{}, false, errors.New("Idempotency-Key must contain 1 to 200 visible ASCII characters")
+	}
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	if c.publishByScope == nil {
+		c.publishByScope = map[string]domain.PublishOperation{}
+		c.publishByID = map[string]domain.PublishOperation{}
+	}
+	scope := auth.TenantID + "\x00" + auth.PrincipalID + "\x00" + request.IdempotencyKey
+	if existing, ok := c.publishByScope[scope]; ok {
+		if existing.PayloadDigest != request.PayloadDigest {
+			return existing, false, service.ErrConflict
+		}
+		return existing, false, nil
+	}
+	now := time.Now().UTC()
+	operation := domain.PublishOperation{
+		ID: "pub-test-" + string(rune('a'+len(c.publishByID))), TenantID: auth.TenantID, PrincipalID: auth.PrincipalID,
+		IdempotencyKeyHash: "test-key-hash", PayloadDigest: request.PayloadDigest, WorkerName: request.WorkerName,
+		Version: request.Version, State: domain.PublishOperationRunning, CreatedAt: now, UpdatedAt: now,
+	}
+	c.publishByScope[scope], c.publishByID[operation.ID] = operation, operation
+	return operation, true, nil
+}
+func (c *stubControlPlane) CompletePublishOperation(_ context.Context, auth service.AuthenticatedContext, operationID string, version domain.WorkerVersion, errorCode, errorMessage string) (domain.PublishOperation, error) {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	operation, ok := c.publishByID[operationID]
+	if !ok || operation.TenantID != auth.TenantID {
+		return domain.PublishOperation{}, service.ErrNotFound
+	}
+	operation.UpdatedAt = time.Now().UTC()
+	if errorCode != "" {
+		operation.State, operation.ErrorCode, operation.ErrorMessage = domain.PublishOperationFailed, errorCode, errorMessage
+	} else {
+		operation.State, operation.WorkerVersion = domain.PublishOperationSucceeded, &version
+	}
+	c.publishByID[operationID] = operation
+	for scope, existing := range c.publishByScope {
+		if existing.ID == operationID {
+			c.publishByScope[scope] = operation
+		}
+	}
+	return operation, nil
+}
+func (c *stubControlPlane) GetPublishOperation(_ context.Context, auth service.AuthenticatedContext, operationID string) (domain.PublishOperation, error) {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	operation, ok := c.publishByID[operationID]
+	if !ok || operation.TenantID != auth.TenantID {
+		return domain.PublishOperation{}, service.ErrNotFound
+	}
+	return operation, nil
 }
 func (c *stubControlPlane) UpdateWorkerVersionDescription(_ context.Context, _ service.AuthenticatedContext, _, _ string, _ int64, description string) (domain.WorkerVersion, error) {
 	if c.err != nil {

@@ -21,14 +21,15 @@ import (
 )
 
 type Config struct {
-	RegistryAllowlist     []string
-	TemporalWebBaseURL    string
-	TemporalNamespace     string
-	BootstrapTTL          time.Duration
-	BootstrapReceiptGrace time.Duration
-	BootstrapVerifier     BootstrapWorkloadVerifier
-	Now                   func() time.Time
-	BootstrapEndpoint     string
+	RegistryAllowlist         []string
+	TemporalWebBaseURL        string
+	TemporalNamespace         string
+	BootstrapTTL              time.Duration
+	BootstrapReceiptGrace     time.Duration
+	BootstrapVerifier         BootstrapWorkloadVerifier
+	Now                       func() time.Time
+	BootstrapEndpoint         string
+	PublishOperationRetention time.Duration
 }
 
 var (
@@ -137,6 +138,9 @@ type Store interface {
 	SaveActionOperation(string, domain.ActionOperation) error
 	ActionOperation(string, string, string, string, string) (domain.ActionOperation, bool)
 	ActionOperations(string, string) []domain.ActionOperation
+	ReservePublishOperation(domain.PublishOperation, time.Time) (domain.PublishOperation, bool, error)
+	SavePublishOperation(string, domain.PublishOperation) error
+	PublishOperation(string, string) (domain.PublishOperation, bool)
 	AppendAudit(string, domain.AuditRecord) error
 	Audits(string) []domain.AuditRecord
 	AcquireQuotaLease(string, domain.QuotaLease) error
@@ -998,11 +1002,12 @@ type MemoryStore struct {
 	audits               map[string][]domain.AuditRecord
 	quotaLeases          map[string]domain.QuotaLease
 	actionOperations     map[string]domain.ActionOperation
+	publishOperations    map[string]domain.PublishOperation
 	bootstrapCredentials map[string]domain.BootstrapCredential
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{tenants: map[string]domain.Tenant{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}, bootstrapCredentials: map[string]domain.BootstrapCredential{}}
+	return &MemoryStore{tenants: map[string]domain.Tenant{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}, publishOperations: map[string]domain.PublishOperation{}, bootstrapCredentials: map[string]domain.BootstrapCredential{}}
 }
 
 func (s *MemoryStore) SaveBootstrapCredential(credential domain.BootstrapCredential) error {

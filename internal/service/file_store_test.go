@@ -3,6 +3,7 @@ package service
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/internal/domain"
 )
@@ -33,6 +34,13 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	if err := store.SaveActionOperation(tenant.ID, operation); err != nil {
 		t.Fatal(err)
 	}
+	publishOperation := domain.PublishOperation{
+		ID: "pub-1", TenantID: tenant.ID, PrincipalID: "principal-1", IdempotencyKeyHash: "key-hash", PayloadDigest: "payload-hash",
+		WorkerName: worker.Name, Version: "v2", State: domain.PublishOperationRunning, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if _, created, err := store.ReservePublishOperation(publishOperation, time.Now().UTC()); err != nil || !created {
+		t.Fatalf("reserve publish operation: created=%v err=%v", created, err)
+	}
 	credential := domain.BootstrapCredential{TokenHash: "sha256-hash-only", Binding: domain.BootstrapBinding{TenantID: tenant.ID, WorkerVersionID: d.ID}}
 	if err := store.SaveBootstrapCredential(credential); err != nil {
 		t.Fatal(err)
@@ -59,6 +67,12 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	}
 	if got, ok := reopened.ActionOperation(tenant.ID, i.ID, operation.RuntimeNodeID, operation.Action, operation.OperationID); !ok || got.State != domain.ActionDeliveryDelivered {
 		t.Fatalf("action operation = %#v, %v", got, ok)
+	}
+	if got, ok := reopened.PublishOperation(tenant.ID, publishOperation.ID); !ok || got.PayloadDigest != publishOperation.PayloadDigest {
+		t.Fatalf("publish operation = %#v, %v", got, ok)
+	}
+	if replayed, created, err := reopened.ReservePublishOperation(publishOperation, time.Now().UTC()); err != nil || created || replayed.ID != publishOperation.ID {
+		t.Fatalf("replayed publish operation = %#v, created=%v err=%v", replayed, created, err)
 	}
 	if got, ok := reopened.BootstrapCredential(credential.TokenHash); !ok || got.Binding.WorkerVersionID != d.ID {
 		t.Fatalf("bootstrap credential = %#v, %v", got, ok)

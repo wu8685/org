@@ -438,6 +438,34 @@ type AuditRecord struct {
 	CreatedAt            time.Time         `json:"createdAt"`
 }
 
+type PublishOperationState string
+
+const (
+	PublishOperationRunning   PublishOperationState = "running"
+	PublishOperationSucceeded PublishOperationState = "succeeded"
+	PublishOperationFailed    PublishOperationState = "failed"
+)
+
+// PublishOperation is the durable user-facing publish reservation and status.
+// Only the hash of the caller-provided idempotency key is persisted.
+type PublishOperation struct {
+	ID                 string                `json:"id"`
+	TenantID           string                `json:"tenantId"`
+	PrincipalID        string                `json:"principalId"`
+	IdempotencyKeyHash string                `json:"idempotencyKeyHash"`
+	PayloadDigest      string                `json:"payloadDigest"`
+	WorkerName         string                `json:"workerName"`
+	Version            string                `json:"version"`
+	State              PublishOperationState `json:"state"`
+	WorkerVersion      *WorkerVersion        `json:"workerVersion,omitempty"`
+	ErrorCode          string                `json:"errorCode,omitempty"`
+	ErrorMessage       string                `json:"errorMessage,omitempty"`
+	RequestID          string                `json:"requestId"`
+	CreatedAt          time.Time             `json:"createdAt"`
+	UpdatedAt          time.Time             `json:"updatedAt"`
+	ExpiresAt          time.Time             `json:"expiresAt,omitempty"`
+}
+
 type ActionDeliveryState string
 
 const (

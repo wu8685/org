@@ -19,6 +19,7 @@ type fileState struct {
 	Audits               map[string][]domain.AuditRecord       `json:"audits"`
 	QuotaLeases          map[string]domain.QuotaLease          `json:"quotaLeases"`
 	ActionOperations     map[string]domain.ActionOperation     `json:"actionOperations"`
+	PublishOperations    map[string]domain.PublishOperation    `json:"publishOperations"`
 	BootstrapCredentials map[string]domain.BootstrapCredential `json:"bootstrapCredentials"`
 }
 type FileStore struct {
@@ -31,7 +32,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	if path == "" {
 		return nil, errors.New("state file path is required")
 	}
-	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}}}
+	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -62,6 +63,9 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	if s.state.ActionOperations == nil {
 		s.state.ActionOperations = map[string]domain.ActionOperation{}
+	}
+	if s.state.PublishOperations == nil {
+		s.state.PublishOperations = map[string]domain.PublishOperation{}
 	}
 	if s.state.BootstrapCredentials == nil {
 		s.state.BootstrapCredentials = map[string]domain.BootstrapCredential{}
