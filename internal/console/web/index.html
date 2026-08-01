@@ -74,12 +74,22 @@
 
   <dialog class="dialog" data-trigger-dialog aria-labelledby="trigger-title">
     <form method="dialog" class="dialog-head"><h2 id="trigger-title">启动 Workflow</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
-    <form class="form-grid" data-trigger-form><fieldset class="schema-fields" data-schema-fields data-trigger-schema-fields><legend>基础输入</legend></fieldset><label>Input (JSON)<textarea name="input" required>{}</textarea></label><label>WorkerVersion<input name="workerVersion"></label><div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">启动 Run</button></div></form>
+    <form class="form-grid" data-trigger-form>
+      <label for="trigger-description">Run description（可选）<textarea id="trigger-description" class="plain-textarea" name="description" maxlength="1000" rows="3" aria-describedby="trigger-description-help"></textarea></label>
+      <p id="trigger-description-help" class="field-help">说明为何启动这一次 Run；最多 1000 个 Unicode 字符、20 行。不要填写 secret。</p>
+      <label for="trigger-format">Payload format<select id="trigger-format" name="inputFormat"><option value="yaml" selected>YAML</option><option value="json">JSON</option></select></label>
+      <label for="trigger-payload">Payload<textarea id="trigger-payload" name="payload" data-trigger-payload spellcheck="false" aria-describedby="trigger-payload-help trigger-error"></textarea></label>
+      <p id="trigger-payload-help" class="field-help">支持任意嵌套 object、array 与 scalar；提交时转换为 HTTP JSON。自定义 tag、alias 与环境变量展开均被禁用。</p>
+      <div id="trigger-error" class="form-error" data-trigger-error role="alert" aria-live="polite" hidden></div>
+      <details class="advanced-fields"><summary>只读 input schema</summary><div data-trigger-schema-reference data-contract-readonly></div><button class="btn btn-secondary" type="button" data-trigger-example>使用 schema 示例</button></details>
+      <label>WorkerVersion<input name="workerVersion"></label>
+      <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">启动 Run</button></div>
+    </form>
   </dialog>
 
   <dialog class="dialog" data-action-dialog aria-labelledby="action-title">
     <form method="dialog" class="dialog-head"><h2 id="action-title">执行节点操作</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
-    <form class="form-grid" data-action-form><div data-action-schema></div><fieldset class="schema-fields" data-schema-fields data-action-schema-fields><legend>基础输入</legend></fieldset><label>Input (JSON)<textarea name="input" required>{}</textarea></label><div class="delivery-warning" data-delivery-state hidden></div><div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">确认提交</button></div></form>
+    <form class="form-grid" data-action-form><div data-action-schema></div><fieldset class="schema-fields" data-schema-fields data-action-schema-fields><legend>基础输入</legend></fieldset><label>Input (JSON)<textarea name="actionInput" required>{}</textarea></label><div class="delivery-warning" data-delivery-state hidden></div><div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">确认提交</button></div></form>
   </dialog>
 </body>
 </html>

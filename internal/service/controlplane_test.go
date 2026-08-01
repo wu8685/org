@@ -782,10 +782,13 @@ func TestStartIdempotencyKeyAvoidsAccidentalDuplicate(t *testing.T) {
 	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
 		t.Fatal(err)
 	}
-	req := StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", IdempotencyKey: "checkout-42", Input: []byte(`{}`)}
+	req := StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Description: "  Why now\r\nValidate release  ", IdempotencyKey: "checkout-42", Input: []byte(`{}`)}
 	first, err := cp.Start(context.Background(), auth, req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first.Description != "Why now\nValidate release" || first.IdempotencyPayloadDigest == "" {
+		t.Fatalf("durable Run description/idempotency intent = %#v", first)
 	}
 	second, err := cp.Start(context.Background(), auth, req)
 	if err != nil {
@@ -793,6 +796,30 @@ func TestStartIdempotencyKeyAvoidsAccidentalDuplicate(t *testing.T) {
 	}
 	if first.ID != second.ID || len(executor.starts) != 1 {
 		t.Fatalf("duplicate start: %q %q calls=%d", first.ID, second.ID, len(executor.starts))
+	}
+	changedDescription := req
+	changedDescription.Description = "A different reason"
+	if _, err := cp.Start(context.Background(), auth, changedDescription); !errors.Is(err, ErrRunIdempotencyConflict) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("different description idempotency error = %v", err)
+	}
+	changedPayload := req
+	changedPayload.Input = []byte(`{"nested":{"items":[1,2]}}`)
+	if _, err := cp.Start(context.Background(), auth, changedPayload); !errors.Is(err, ErrRunIdempotencyConflict) {
+		t.Fatalf("different payload idempotency error = %v", err)
+	}
+	changedVersion := req
+	changedVersion.WorkerVersion = "v2"
+	if _, err := cp.Start(context.Background(), auth, changedVersion); !errors.Is(err, ErrRunIdempotencyConflict) {
+		t.Fatalf("different requested version idempotency error = %v", err)
+	}
+	foundDescriptionAudit := false
+	for _, audit := range cp.store.Audits(auth.TenantID) {
+		if audit.Action == "run.start" && audit.References["description"] == first.Description {
+			foundDescriptionAudit = true
+		}
+	}
+	if !foundDescriptionAudit {
+		t.Fatalf("Run description missing from Tenant audit: %#v", cp.store.Audits(auth.TenantID))
 	}
 }
 

@@ -74,12 +74,15 @@ func TestControlPlaneDerivesTenantFromAuthenticatedContextAndHidesCrossTenantObj
 		t.Fatalf("tenant runtime names collided: A=%+v B=%+v", depA, depB)
 	}
 
-	invB, err := cp.Start(context.Background(), authFor(tenantB), StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+	invB, err := cp.Start(context.Background(), authFor(tenantB), StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Description: "Tenant B private reason", Input: []byte(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cp.GetInvocation(context.Background(), authFor(tenantA), invB.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant read must be indistinguishable from missing, got %v", err)
+	}
+	if view, err := cp.GetInvocation(context.Background(), authFor(tenantB), invB.ID); err != nil || view.Invocation.Description != "Tenant B private reason" {
+		t.Fatalf("own-Tenant Run description missing: view=%#v err=%v", view, err)
 	}
 	audits := store.Audits(tenantA.ID)
 	if len(audits) == 0 || audits[len(audits)-1].AuthorizationResult != "allowed" || audits[len(audits)-1].Outcome != "failure" || audits[len(audits)-1].ErrorClass != "not_found" || audits[len(audits)-1].TenantID != tenantA.ID {

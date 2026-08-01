@@ -164,6 +164,27 @@ func TestWorkerVersionDescriptionIsRequiredPlainText(t *testing.T) {
 	}
 }
 
+func TestNormalizeRunDescriptionAllowsEmptyUnicodeAndBoundedMultilinePlainText(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: ""},
+		{input: "  为什么启动：验证发布。\r\n第二行\r  ", want: "为什么启动：验证发布。\n第二行"},
+		{input: "tab\tok", want: "tab\tok"},
+	} {
+		got, err := NormalizeRunDescription(test.input)
+		if err != nil || got != test.want {
+			t.Fatalf("NormalizeRunDescription(%q)=%q, %v; want %q", test.input, got, err, test.want)
+		}
+	}
+	for _, invalid := range []string{strings.Repeat("界", 1001), strings.Repeat("line\n", 20) + "line", "unsafe\x00text", "escape\x1btext", string([]byte{0xff, 0xfe})} {
+		if _, err := NormalizeRunDescription(invalid); err == nil {
+			t.Fatalf("invalid Run description accepted: %q", invalid)
+		}
+	}
+}
+
 func TestWorkerVersionRejectsInvalidActionContract(t *testing.T) {
 	req := validWorkerVersionRequest()
 	req.Metadata.Workflows[0].Actions = []ActionContract{{Name: "confirm", Label: "Confirm", NodeTemplateID: "approval"}}

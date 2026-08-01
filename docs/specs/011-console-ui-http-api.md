@@ -514,11 +514,33 @@ UI状态语义：
 本节只改变Console presentation，不改变HTTP/JSON API、Org SDK canonical JSON bytes/digest、bootstrap contract binding、schema validation或持久化格式。
 
 - 所有只读structured-data code view统一显示YAML：WorkerVersion的version config、Read-only SDK contract，以及Workflow的read-only input contract/schema。后续新增的structured diagnostics必须复用同一renderer。Runtime DAG、状态卡片和字段化diagnostics继续使用其语义组件，不为“统一”而退化成文本块。
-- publish的advanced`versionConfig`、Trigger/Action的raw fallback input仍是JSON输入，因为服务端API接收JSON；Workflow与Action表单继续由read-only schema生成字段。不得让用户编辑YAML来替代schema validation，也不得把YAML送入publish/run/action API。
+- publish的advanced`versionConfig`与Action的raw fallback input仍是JSON输入，因为服务端API接收JSON。Trigger由后文已批准的structured payload editor amendment取代schema-generated表单，并可在浏览器内编辑JSON或受控YAML；不得把YAML原文送入publish/run/action API，也不得绕过服务端schema validation。
 - renderer只接受JSON data model：object、array、string、finite number、boolean与null。object key按确定性词法顺序排序，使用2-space indentation；空object/array分别显示`{}`/`[]`。unsafe key与所有string使用YAML兼容的quoted scalar，嵌套array/object使用block style。
 - renderer必须有depth/output bounds，并在cycle、non-finite number、unsupported value、getter异常或超限时返回固定、安全、无内部细节的fallback。不得部分渲染后声称成功。
 - DOM只用`textContent`写入renderer结果，禁止`innerHTML`；这样原始`<script>`、HTML attribute或YAML tag样式字符串只作为文本显示。copy按钮复制原始YAML文本，不复制HTML entity；按钮有明确accessible label，相邻`aria-live`状态报告成功/失败，失败时保留可手动选择的`<pre>`。
 - display view标注`YAML`且可滚动、键盘聚焦和复制。空值显示`null`而非空白；错误fallback仍保留view label并标记不可复制。
+
+### Trigger structured payload editor
+
+**Approved correction — 2026-08-02.** Workflow input schema描述的是每个Workflow自己的业务payload，不是让Console生成固定`name`、`subject`等标准字段的UI模型。
+
+- Trigger modal删除所有schema-derived input controls和重复的`Input (JSON)`字段，只保留一个payload editor、JSON/YAML显式format selector、只读schema reference、把schema-derived example填入editor的操作、WorkerVersion与提交/取消操作。默认format为YAML。
+- editor接受任意JSON data model，包括nested object/array/scalar/null。空白editor解析为`null`并提交给既有schema validator；是否允许空值只由选中WorkerVersion的Workflow input schema决定，UI不得硬编码object或必填字段。
+- schema只用于只读reference、生成最小example和服务端validation。example由required properties递归生成；不把schema字段渲染成标准表单。用户可把example填入editor后自由扩展复杂结构。
+- format切换必须先按当前format解析，再无损序列化到目标format；解析失败时保留原文、format和光标可编辑状态并显示inline error。JSON/YAML语法错误显示根path`$`；YAML还显示准确line。服务端schema错误原样保留`$.field`/`$[index]`path并显示在同一`aria-live`错误区，不关闭modal或清空payload。
+- 浏览器内YAML parser只实现受控的JSON-data YAML subset：block mapping/sequence、quoted/plain string、finite number、boolean、null、empty/inline JSON collection；允许renderer产生的2-space block style。拒绝tabs、duplicate key、document directive、custom tag、anchor、alias、merge key、block scalar、non-finite number、unsupported object与超过1 MiB/depth 64的输入；不解析environment/secret expansion。
+- JSON parser采用相同1 MiB边界；两种format最终都转为JSON-compatible value，再用deterministic key ordering编码。HTTP request仍是`application/json`，既有control plane再次canonicalize并执行同一个JSON Schema validator；Org SDK runtime、contract digest和bootstrap协议没有变化。
+- textarea有明确label、format说明、`aria-describedby`和等宽字体；error使用`aria-live=polite`。schema reference继续以只读YAML显示并可复制；“使用示例”只更新editor，不自动提交Run。
+
+### Per-Run trigger description
+
+**Approved addition — 2026-08-02.**
+
+- start request新增可选`description`。它只属于这一次Invocation/Run，用于说明“为何启动”；不写入Workflow contract、Worker或WorkerVersion，也不参与Workflow input schema、Temporal Workflow input或SDK canonical contract/digest。
+- Console在payload editor旁提供plain-text `Run description` textarea。空值合法；服务端把CRLF/CR规范化为LF、trim首尾空白，允许Unicode、tab与最多20行换行，拒绝其他C0 control，最大1000 Unicode code points。description按plain text处理，不解释Markdown/HTML；UI一律用`textContent`显示。
+- Invocation durable record、Run list/detail HTTP read model与Tenant-scoped `run.start` Audit保存/展示规范化description。旧Invocation缺少字段时按空字符串读取；Tenant authorization边界不变。
+- start idempotency intent digest必须包含route worker、workflow、请求中的可选WorkerVersion、canonical payload与规范化description。同Tenant/worker/workflow/key且相同intent重放原Run；同key但description、payload或requested version不同返回明确`run_idempotency_conflict`，不得静默复用。旧记录没有intent digest时，仅当canonical input、description及显式version与原Run兼容才允许重放，否则fail closed conflict。
+- description不进入payload JSON Schema validation，也不改变Temporal执行输入。Audit可记录这段用户提供的plain text，但不得把Workflow payload、credential或secret复制进Audit；Console文案提醒用户不要把secret放进description。
 
 ## 待确认的实现取舍
 

@@ -7,7 +7,8 @@
   const notice = document.querySelector("[data-notice]");
   const actions = document.querySelector("[data-heading-actions]");
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
-  const yamlRenderer = window.OrgYAML;
+  const payloadCodec = window.OrgYAML;
+  const yamlRenderer = payloadCodec;
   const segments = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   let lastRunETag = "";
   let actionContext = null;
@@ -133,6 +134,28 @@
     });
     if (!Object.keys(properties).length) fieldset.append(el("p", {class: "muted", text: "此操作无需输入字段。"}));
     updateJSON();
+  }
+
+  function exampleFromSchema(schema) {
+    if (!schema || typeof schema !== "object") return null;
+    if (Object.prototype.hasOwnProperty.call(schema, "default")) return schema.default;
+    if (Object.prototype.hasOwnProperty.call(schema, "example")) return schema.example;
+    if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
+    switch (schema.type) {
+    case "object": {
+      const value = {};
+      const required = new Set(schema.required || []);
+      Object.entries(schema.properties || {}).forEach(([name, child]) => {
+        if (required.has(name)) value[name] = exampleFromSchema(child);
+      });
+      return value;
+    }
+    case "array": return [];
+    case "boolean": return false;
+    case "number": case "integer": return 0;
+    case "string": return "";
+    default: return null;
+    }
   }
 
   async function renderOverview() {
@@ -271,8 +294,8 @@
     const {items} = await api("/api/v1/runs" + location.search);
     clear(content);
     if (!items.length) return content.append(empty("当前筛选没有 Run。"));
-    content.append(table(["Run", "Worker", "Workflow", "Selected version", "Created"], items.map(run => [
-      link(run.id, `/runs/${encodeURIComponent(run.id)}`), run.workerName, run.workflow, mono(run.selectedVersion), new Date(run.createdAt).toLocaleString(),
+    content.append(table(["Run", "Description", "Worker", "Workflow", "Selected version", "Created"], items.map(run => [
+      link(run.id, `/runs/${encodeURIComponent(run.id)}`), run.description || "—", run.workerName, run.workflow, mono(run.selectedVersion), new Date(run.createdAt).toLocaleString(),
     ])));
   }
 
@@ -285,7 +308,7 @@
     const run = response.run, projection = response.semanticProjection;
     clear(content);
     content.append(el("div", {class: "grid-2"}, [
-      card([el("h2", {text: "Run"}), definition([["Run ID", mono(run.id)], ["Worker", run.workerName], ["Workflow", run.workflow], ["Selected version", mono(run.selectedVersion)], ["Release description", response.workerVersion.description]])]),
+      card([el("h2", {text: "Run"}), definition([["Run ID", mono(run.id)], ["Run description", run.description || "—"], ["Worker", run.workerName], ["Workflow", run.workflow], ["Selected version", mono(run.selectedVersion)], ["Release description", response.workerVersion.description]])]),
       card([el("h2", {text: "Live status"}), definition([["Execution", status(response.execution.status)], ["Projection", projection ? status(projection.runStatus) : "Unavailable"], ["Projection revision", projection?.projectionRevision ?? "—"], ["Allowed actions", projection?.allowedActions?.length || 0]])]),
     ]));
     if (response.temporalDiagnosticsUrl) content.append(section("Advanced diagnostics", card(link("Open advanced diagnostics ↗", response.temporalDiagnosticsUrl))));
@@ -397,23 +420,72 @@
 
   const triggerDialog = document.querySelector("[data-trigger-dialog]");
   const triggerForm = document.querySelector("[data-trigger-form]");
+  const triggerPayload = document.querySelector("[data-trigger-payload]");
+  const triggerError = document.querySelector("[data-trigger-error]");
+  const triggerSchemaReference = document.querySelector("[data-trigger-schema-reference]");
+  const triggerExample = document.querySelector("[data-trigger-example]");
   let triggerContext = null;
-  function openTrigger(workerName, workerVersion, workflowName, workflowContract) {
-    triggerContext = {workerName, workerVersion, workflow: workflowName};
-    triggerForm.elements.workerVersion.value = workerVersion;
-    buildSchemaFields(workflowContract.inputSchema || {}, document.querySelector("[data-trigger-schema-fields]"), triggerForm.elements.input);
-    triggerDialog.showModal();
-    triggerForm.querySelector("[data-schema-property]")?.focus();
+  function clearTriggerError() {
+    triggerError.textContent = "";
+    triggerError.hidden = true;
+    triggerPayload.removeAttribute("aria-invalid");
   }
+  function showTriggerError(message) {
+    triggerError.textContent = message;
+    triggerError.hidden = false;
+    triggerPayload.setAttribute("aria-invalid", "true");
+    triggerPayload.focus();
+  }
+  function formatTriggerPayload(value, format) {
+    if (format === "json") return JSON.stringify(JSON.parse(payloadCodec.canonicalJSON(value)), null, 2);
+    const rendered = payloadCodec.render(value);
+    if (!rendered.ok) throw new Error("Payload 无法安全转换为 YAML。");
+    return rendered.text;
+  }
+  function openTrigger(workerName, workerVersion, workflowName, workflowContract) {
+    const schema = workflowContract.inputSchema || {};
+    triggerContext = {workerName, workerVersion, workflow: workflowName, schema, example: exampleFromSchema(schema)};
+    triggerForm.reset();
+    triggerForm.elements.workerVersion.value = workerVersion;
+    triggerForm.elements.inputFormat.value = "yaml";
+    triggerPayload.value = formatTriggerPayload(triggerContext.example, "yaml");
+    clearTriggerError();
+    clear(triggerSchemaReference);
+    triggerSchemaReference.append(yamlView(schema, "Input schema"));
+    triggerDialog.showModal();
+    triggerPayload.focus();
+  }
+  triggerPayload.addEventListener("input", clearTriggerError);
+  triggerExample.addEventListener("click", () => {
+    triggerPayload.value = formatTriggerPayload(triggerContext.example, triggerForm.elements.inputFormat.value);
+    clearTriggerError();
+    triggerPayload.focus();
+  });
+  triggerForm.elements.inputFormat.addEventListener("change", event => {
+    const previous = event.target.value === "json" ? "yaml" : "json";
+    const parsed = payloadCodec.parse(previous, triggerPayload.value);
+    if (!parsed.ok) {
+      event.target.value = previous;
+      showTriggerError(parsed.error);
+      return;
+    }
+    triggerPayload.value = formatTriggerPayload(parsed.value, event.target.value);
+    clearTriggerError();
+  });
   triggerForm.addEventListener("submit", async event => {
     event.preventDefault();
+    const parsed = payloadCodec.parse(triggerForm.elements.inputFormat.value, triggerPayload.value);
+    if (!parsed.ok) {
+      showTriggerError(parsed.error);
+      return;
+    }
     try {
       const operationKey = crypto.randomUUID();
       const result = await api(`/api/v1/workers/${encodeURIComponent(triggerContext.workerName)}/workflows/${encodeURIComponent(triggerContext.workflow)}/runs`, {
-        method: "POST", headers: {"Idempotency-Key": operationKey}, body: JSON.stringify({workerVersion: triggerForm.elements.workerVersion.value || undefined, input: JSON.parse(triggerForm.elements.input.value)}),
+        method: "POST", headers: {"Idempotency-Key": operationKey}, body: JSON.stringify({workerVersion: triggerForm.elements.workerVersion.value || undefined, description: triggerForm.elements.description.value, input: parsed.value}),
       });
       location.href = `/runs/${encodeURIComponent(result.run.id)}`;
-    } catch (error) { handleError(error); }
+    } catch (error) { showTriggerError(error.message || "Run 启动失败。"); }
   });
 
   const actionDialog = document.querySelector("[data-action-dialog]");
@@ -426,7 +498,7 @@
       if (!actionContract) throw new Error("Action contract 不存在或已变化");
       actionContext = {run, semanticProjection, node, allowedAction, actionContract, operationKey: crypto.randomUUID()};
       document.querySelector("[data-action-schema]").textContent = `${node.label} / ${allowedAction.label || allowedAction.name} · requiredPermission: ${actionContract.requiredPermission}`;
-      buildSchemaFields(actionContract.inputSchema || {}, document.querySelector("[data-action-schema-fields]"), actionForm.elements.input);
+      buildSchemaFields(actionContract.inputSchema || {}, document.querySelector("[data-action-schema-fields]"), actionForm.elements.actionInput);
       actionDialog.showModal(); actionForm.querySelector("[data-schema-property]")?.focus();
     } catch (error) { handleError(error); }
   }
@@ -437,7 +509,7 @@
       const result = await api(`/api/v1/runs/${encodeURIComponent(context.run.id)}/nodes/${encodeURIComponent(context.node.runtimeNodeId)}/actions/${encodeURIComponent(context.allowedAction.name)}`, {
         method: "POST",
         headers: {"Idempotency-Key": context.operationKey, "If-Match": `"projection-r${context.semanticProjection.projectionRevision}"`},
-        body: JSON.stringify({input: JSON.parse(actionForm.elements.input.value)}),
+        body: JSON.stringify({input: JSON.parse(actionForm.elements.actionInput.value)}),
       });
       const stateBox = document.querySelector("[data-delivery-state]");
       stateBox.hidden = false; stateBox.textContent = result.operation.state === "delivery-unknown" ? "送达结果未知。可使用同一操作 key 安全查询或重试；请勿创建新操作。" : `送达状态：${result.operation.state}。等待 Workflow 确认。`;

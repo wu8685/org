@@ -23,7 +23,7 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := domain.WorkerVersion{ID: "ver-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Version: "v1", Description: "Initial release.", Revision: 1, Current: true}
-	i := domain.Invocation{ID: "inv-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Workflow: "ChargeOrder", IdempotencyKey: "checkout-42"}
+	i := domain.Invocation{ID: "inv-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Workflow: "ChargeOrder", Description: "Why this Run exists", IdempotencyKey: "checkout-42", IdempotencyPayloadDigest: "sha256:intent"}
 	if err := store.SaveWorkerVersion(tenant.ID, d); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	if got := reopened.WorkerVersions(tenant.ID, "payments-worker"); len(got) != 1 || got[0].ID != d.ID || got[0].Description != "Corrected release." || got[0].Revision != 2 {
 		t.Fatalf("deployments = %#v", got)
 	}
-	if got, ok := reopened.Invocation(tenant.ID, "inv-1"); !ok || got.IdempotencyKey != i.IdempotencyKey {
+	if got, ok := reopened.Invocation(tenant.ID, "inv-1"); !ok || got.IdempotencyKey != i.IdempotencyKey || got.Description != i.Description || got.IdempotencyPayloadDigest != i.IdempotencyPayloadDigest {
 		t.Fatalf("invocation = %#v, %v", got, ok)
 	}
 	if got, ok := reopened.ActionOperation(tenant.ID, i.ID, operation.RuntimeNodeID, operation.Action, operation.OperationID); !ok || got.State != domain.ActionDeliveryDelivered {

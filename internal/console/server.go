@@ -310,6 +310,7 @@ func (s *server) updateDescription(response http.ResponseWriter, request *http.R
 func (s *server) startRun(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, workerName, workflow string) {
 	var input struct {
 		WorkerVersion string          `json:"workerVersion,omitempty"`
+		Description   string          `json:"description,omitempty"`
 		Input         json.RawMessage `json:"input"`
 	}
 	if err := decodeJSON(response, request, &input); err != nil {
@@ -317,7 +318,7 @@ func (s *server) startRun(response http.ResponseWriter, request *http.Request, r
 		return
 	}
 	invocation, err := s.controlPlane.Start(request.Context(), identity.Auth, service.StartRequest{
-		WorkerName: workerName, Workflow: workflow, WorkerVersion: input.WorkerVersion,
+		WorkerName: workerName, Workflow: workflow, WorkerVersion: input.WorkerVersion, Description: input.Description,
 		IdempotencyKey: strings.TrimSpace(request.Header.Get("Idempotency-Key")), Input: input.Input,
 	})
 	if err != nil {
@@ -540,7 +541,8 @@ func (s *server) runDetail(response http.ResponseWriter, request *http.Request, 
 		"requestId": requestID,
 		"run": map[string]any{
 			"id": view.Invocation.ID, "workerName": view.Invocation.WorkerName, "workflow": view.Invocation.Workflow,
-			"selectedVersion": view.Invocation.SelectedVersion, "input": view.Invocation.Input, "actor": view.Invocation.Actor, "createdAt": view.Invocation.CreatedAt,
+			"selectedVersion": view.Invocation.SelectedVersion, "description": view.Invocation.Description,
+			"input": view.Invocation.Input, "actor": view.Invocation.Actor, "createdAt": view.Invocation.CreatedAt,
 		},
 		"workerVersion": map[string]any{"version": view.WorkerVersion.Version, "description": view.WorkerVersion.Description, "revision": view.WorkerVersion.Revision},
 		"execution":     view.Execution, "semanticProjection": view.SemanticProjection,
@@ -668,7 +670,8 @@ func versionSummaries(versions []domain.WorkerVersion) []versionSummaryResponse 
 func publicInvocation(invocation domain.Invocation) map[string]any {
 	return map[string]any{
 		"id": invocation.ID, "workerName": invocation.WorkerName, "workflow": invocation.Workflow,
-		"selectedVersion": invocation.SelectedVersion, "input": invocation.Input, "actor": invocation.Actor,
+		"selectedVersion": invocation.SelectedVersion, "description": invocation.Description,
+		"input": invocation.Input, "actor": invocation.Actor,
 		"createdAt": invocation.CreatedAt,
 	}
 }
@@ -835,6 +838,8 @@ func httpError(err error) (int, string, string) {
 		return http.StatusConflict, "worker_version_exists", "WorkerVersion already exists; publish a new version"
 	case errors.Is(err, service.ErrPublishIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used with a different publish request"
+	case errors.Is(err, service.ErrRunIdempotencyConflict):
+		return http.StatusConflict, "run_idempotency_conflict", "Idempotency-Key was already used with a different Run start request"
 	case errors.Is(err, service.ErrConflict):
 		return http.StatusConflict, "conflict", "Resource state conflicts with the request"
 	case errors.Is(err, service.ErrTenantQuotaExceeded):

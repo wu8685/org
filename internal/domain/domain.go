@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -444,12 +445,16 @@ type Invocation struct {
 	TemporalWorkflowID string          `json:"-"`
 	TemporalRunID      string          `json:"-"`
 	Input              json.RawMessage `json:"input"`
+	Description        string          `json:"description,omitempty"`
 	IdempotencyKey     string          `json:"idempotencyKey,omitempty"`
-	Actor              string          `json:"actor"`
-	State              InvocationState `json:"state"`
-	Failure            string          `json:"failure,omitempty"`
-	CreatedAt          time.Time       `json:"createdAt"`
-	UpdatedAt          time.Time       `json:"updatedAt"`
+	// IdempotencyPayloadDigest is durable control-plane state. Console read
+	// models deliberately omit it.
+	IdempotencyPayloadDigest string          `json:"idempotencyPayloadDigest,omitempty"`
+	Actor                    string          `json:"actor"`
+	State                    InvocationState `json:"state"`
+	Failure                  string          `json:"failure,omitempty"`
+	CreatedAt                time.Time       `json:"createdAt"`
+	UpdatedAt                time.Time       `json:"updatedAt"`
 }
 
 type AuditRecord struct {
@@ -821,6 +826,30 @@ func ValidateDescription(value string) error {
 		}
 	}
 	return nil
+}
+
+// NormalizeRunDescription validates the optional, user-visible reason for one
+// Invocation. It is plain text, not Workflow input, and must remain small
+// enough for list, detail, and audit views.
+func NormalizeRunDescription(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", errors.New("Run description must be valid UTF-8")
+	}
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) > 1000 {
+		return "", errors.New("Run description must contain at most 1000 Unicode code points")
+	}
+	if value != "" && strings.Count(value, "\n")+1 > 20 {
+		return "", errors.New("Run description must contain at most 20 lines")
+	}
+	for _, r := range value {
+		if (r < 32 && r != '\n' && r != '\t') || r == 127 {
+			return "", errors.New("Run description contains an unsafe control character")
+		}
+	}
+	return value, nil
 }
 
 func ValidateWorkerName(value string) error {

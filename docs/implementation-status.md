@@ -38,6 +38,7 @@ Implemented and covered by tests:
 - deterministic concurrent action routing and contract input enforcement: one Org SDK dispatcher routes the reserved Signal by stable runtime node ID with a bounded pre-wait inbox, while Workflow, Signal and Query JSON inputs are canonicalized and schema-validated before quota mutation or executor calls;
 - complete bootstrap lifecycle Audit: credential issuance, known-credential receipt/verification/rejection/revocation and registration state commit atomically without credential material; promotion records durable poller-ready, probe-verified, retrying, failed-phase and Current-success outcomes using its stable attempt ID;
 - Go server-rendered Console with progressive JavaScript, approved calm console visual language, read-only generated contract display, responsive resource tables, runtime dependency-driven DAG layout, equivalent mobile structured node list and persistent delivery-unknown action feedback;
+- Workflow Trigger Console uses one bounded JSON/YAML payload editor rather than schema-derived fixed fields, keeps schema as a copyable read-only reference, and sends canonical JSON to the existing service validator; optional normalized Run description persists in Tenant-scoped Run list/detail/Audit data and participates in durable start idempotency intent;
 - loopback-only local Console executable with server-configured development Tenant/principal identity; request headers cannot override Tenant.
 - real local Console acceptance across `kind-org` and host Temporal: Hello covers Worker/Workflow plus Current and historical pinned Run reads; parallel-confirmation submits and retries the authorized action through the HTTP Gateway then polls accepted outcome; dynamic-decision verifies both runtime branches expose the unselected node as `skipped` through the Console Run API.
 
@@ -45,7 +46,7 @@ Still deferred:
 
 - security measures proposed by the unapproved `010-workflow-execution-risk-defense.md` Draft, including adversarial-image isolation and production supply-chain policy.
 
-Latest local verification on 2026-08-01:
+Latest local verification on 2026-08-02:
 
 - root `go test -race ./...` and `go vet ./...` passed;
 - all three independent Sample modules passed `go test -race ./...` and `go vet ./...`;

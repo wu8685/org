@@ -42,6 +42,7 @@ var (
 	ErrConflict                   = errors.New("conflict")
 	ErrWorkerVersionExists        = fmt.Errorf("%w: worker version already exists", ErrConflict)
 	ErrPublishIdempotencyConflict = fmt.Errorf("%w: idempotency key was already used with a different publish request", ErrConflict)
+	ErrRunIdempotencyConflict     = fmt.Errorf("%w: idempotency key was already used with a different Run start request", ErrConflict)
 )
 
 const (
@@ -118,6 +119,7 @@ type StartRequest struct {
 	WorkerName     string          `json:"workerName"`
 	Workflow       string          `json:"workflow"`
 	WorkerVersion  string          `json:"workerVersion,omitempty"`
+	Description    string          `json:"description,omitempty"`
 	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 	Input          json.RawMessage `json:"input"`
 }
@@ -648,10 +650,26 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	if tenant.Status != domain.TenantActive {
 		return domain.Invocation{}, ErrTenantSuspended
 	}
+	canonicalInput, err := canonicalJSON(req.Input)
+	if err != nil {
+		return domain.Invocation{}, fmt.Errorf("workflow input schema: %w", err)
+	}
+	description, err := domain.NormalizeRunDescription(req.Description)
+	if err != nil {
+		return domain.Invocation{}, err
+	}
+	req.Input, req.Description = canonicalInput, description
+	intentDigest, err := runStartIntentDigest(req)
+	if err != nil {
+		return domain.Invocation{}, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if req.IdempotencyKey != "" {
 		if existing, ok := c.store.InvocationByIdempotency(tenant.ID, req.WorkerName, req.Workflow, req.IdempotencyKey); ok {
+			if !sameRunStartIntent(existing, req, intentDigest) {
+				return domain.Invocation{}, ErrRunIdempotencyConflict
+			}
 			result = existing
 			return existing, nil
 		}
@@ -682,10 +700,6 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	if !ok {
 		return domain.Invocation{}, fmt.Errorf("workflow %q is not declared", req.Workflow)
 	}
-	canonicalInput, err := canonicalJSON(req.Input)
-	if err != nil {
-		return domain.Invocation{}, fmt.Errorf("workflow input schema: %w", err)
-	}
 	if err := validateJSONSchema(workflowContract.InputSchema, canonicalInput); err != nil {
 		return domain.Invocation{}, fmt.Errorf("workflow input schema: %w", err)
 	}
@@ -701,7 +715,7 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	}
 	start := ExecutionStart{InvocationID: invocationID, WorkflowID: names.WorkflowID, Workflow: req.Workflow, Input: req.Input, TaskQueue: selected.TaskQueue, DeploymentName: selected.WorkerDeployment, PinnedVersion: selected.Version}
 	now := time.Now().UTC()
-	inv := domain.Invocation{ID: invocationID, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Workflow: req.Workflow, SelectedVersion: selected.Version, TaskQueue: selected.TaskQueue, WorkerDeployment: selected.WorkerDeployment, TemporalWorkflowID: names.WorkflowID, Input: append(json.RawMessage(nil), req.Input...), IdempotencyKey: req.IdempotencyKey, Actor: auth.PrincipalID, State: domain.InvocationStarting, CreatedAt: now, UpdatedAt: now}
+	inv := domain.Invocation{ID: invocationID, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Workflow: req.Workflow, SelectedVersion: selected.Version, TaskQueue: selected.TaskQueue, WorkerDeployment: selected.WorkerDeployment, TemporalWorkflowID: names.WorkflowID, Input: append(json.RawMessage(nil), req.Input...), Description: req.Description, IdempotencyKey: req.IdempotencyKey, IdempotencyPayloadDigest: intentDigest, Actor: auth.PrincipalID, State: domain.InvocationStarting, CreatedAt: now, UpdatedAt: now}
 	result = inv
 	runLeaseID := "run:" + invocationID
 	if err := c.store.CommitInvocationReservation(tenant.ID, inv, domain.QuotaLease{ID: runLeaseID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: now}); err != nil {
@@ -717,6 +731,38 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	}
 	result = inv
 	return inv, nil
+}
+
+func runStartIntentDigest(req StartRequest) (string, error) {
+	encoded, err := json.Marshal(struct {
+		WorkerName    string          `json:"workerName"`
+		Workflow      string          `json:"workflow"`
+		WorkerVersion string          `json:"workerVersion,omitempty"`
+		Description   string          `json:"description,omitempty"`
+		Input         json.RawMessage `json:"input"`
+	}{req.WorkerName, req.Workflow, req.WorkerVersion, req.Description, req.Input})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func sameRunStartIntent(existing domain.Invocation, req StartRequest, digest string) bool {
+	if existing.IdempotencyPayloadDigest != "" {
+		return existing.IdempotencyPayloadDigest == digest
+	}
+	// Records created before the durable intent digest can only be replayed
+	// when their persisted user-visible intent is demonstrably equivalent.
+	existingInput, err := canonicalJSON(existing.Input)
+	if err != nil || string(existingInput) != string(req.Input) {
+		return false
+	}
+	existingDescription, err := domain.NormalizeRunDescription(existing.Description)
+	if err != nil || existingDescription != req.Description {
+		return false
+	}
+	return req.WorkerVersion == "" || req.WorkerVersion == existing.SelectedVersion
 }
 
 func (c *ControlPlane) ReconcileInvocations(ctx context.Context) error {
@@ -1271,6 +1317,7 @@ func invocationReferences(inv domain.Invocation) map[string]string {
 	return map[string]string{
 		"workerName": inv.WorkerName, "workflow": inv.Workflow, "taskQueue": inv.TaskQueue,
 		"workerDeployment": inv.WorkerDeployment, "temporalWorkflowId": inv.TemporalWorkflowID,
+		"description": inv.Description,
 	}
 }
 

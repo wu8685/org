@@ -88,9 +88,10 @@ make kind-load \
 1. 在 Console 创建 Worker `hello-worker`。
 2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU 和 `128Mi` memory；无需填写源码来源或上传合同文件。
 3. 等待候选 Worker 完成 SDK registration、poller 与 probe。
-4. 触发 `HelloWorkflow`，input 为 `{"name":"Codex"}`。
-5. 立即打开 Run detail：`prepare-greeting` 很快完成，`compose-greeting` 会保持约 10 秒 `running`，随后进入 `completed`。
-6. 等待最终结果 `Hello, Codex!`。
+4. 触发 `HelloWorkflow`。Trigger editor 默认使用 YAML，可输入 `name: Codex`；切换为 JSON 时输入 `{"name":"Codex"}`。只读 schema 是参考，不会生成固定业务字段。
+5. 可选填写 Run description，说明为何启动这一次 Run；它不属于 payload，也不要包含 Secret。
+6. 立即打开 Run detail：`prepare-greeting` 很快完成，`compose-greeting` 会保持约 10 秒 `running`，随后进入 `completed`。
+7. 等待最终结果 `Hello, Codex!`。
 
 Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册。用户不管理 contract artifact，Console 只读展示注册结果。
 

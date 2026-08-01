@@ -69,9 +69,10 @@ make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 
 1. 在 Console 创建 Worker `parallel-confirmation-worker`。
 2. 用上一步 digest 发布 Version，并等待 SDK registration、poller 与 probe。
-3. 触发 `ParallelConfirmationWorkflow`，input 为 `{"subject":"release notes"}`。
-4. Run detail 先显示 `approval-gate = waiting-for-user` 和 `confirm` action。
-5. 提交确认后，观察两个 running branch、join 与 finalize 依次完成。
+3. 触发 `ParallelConfirmationWorkflow`。Trigger editor 默认使用 YAML，可输入 `subject: release notes`；切换为 JSON 时输入 `{"subject":"release notes"}`。只读 schema 仅供核对复杂 payload，不生成标准表单字段。
+4. 可选填写 Run description，说明这一次审批为何发起；它不属于 payload，也不要包含 Secret。
+5. Run detail 先显示 `approval-gate = waiting-for-user` 和 `confirm` action。
+6. 提交确认后，观察两个 running branch、join 与 finalize 依次完成。
 
 Gateway 会校验 Tenant、permission、input schema、projection revision 与 `Idempotency-Key`。终端用户不直连 Temporal，也不直接发送 Signal。
 

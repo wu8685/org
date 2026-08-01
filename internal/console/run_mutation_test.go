@@ -13,18 +13,18 @@ import (
 )
 
 func TestStartRunUsesRouteIdentityAndHeaderIdempotencyKey(t *testing.T) {
-	backend := &stubControlPlane{startedRun: domain.Invocation{ID: "inv-1", WorkerName: "decision-worker", Workflow: "DecisionWorkflow", SelectedVersion: "v1"}}
+	backend := &stubControlPlane{startedRun: domain.Invocation{ID: "inv-1", WorkerName: "decision-worker", Workflow: "DecisionWorkflow", SelectedVersion: "v1", Description: "Why now\n<script>alert(1)</script>"}}
 	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: backend})
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/decision-worker/workflows/DecisionWorkflow/runs", strings.NewReader(`{"workerVersion":"v1","input":{"route":"short"}}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/decision-worker/workflows/DecisionWorkflow/runs", strings.NewReader(`{"workerVersion":"v1","description":"Why now\n<script>alert(1)</script>","input":{"nested":{"routes":["short",{"fallback":true}]}}}`))
 	request.Header.Set("X-CSRF-Token", "csrf-a")
 	request.Header.Set("Idempotency-Key", "start-42")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"selectedVersion":"v1"`) {
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"selectedVersion":"v1"`) || !strings.Contains(response.Body.String(), `"description":"Why now\n\u003cscript\u003ealert(1)\u003c/script\u003e"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	if backend.startRequest.WorkerName != "decision-worker" || backend.startRequest.Workflow != "DecisionWorkflow" || backend.startRequest.IdempotencyKey != "start-42" || !strings.Contains(string(backend.startRequest.Input), `"route":"short"`) {
+	if backend.startRequest.WorkerName != "decision-worker" || backend.startRequest.Workflow != "DecisionWorkflow" || backend.startRequest.Description != "Why now\n<script>alert(1)</script>" || backend.startRequest.IdempotencyKey != "start-42" || !strings.Contains(string(backend.startRequest.Input), `"routes":["short",{"fallback":true}]`) {
 		t.Fatalf("start request=%#v", backend.startRequest)
 	}
 }

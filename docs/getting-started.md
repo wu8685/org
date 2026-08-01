@@ -144,13 +144,23 @@ candidate deployment
 
 1. 打开 Workflows。
 2. 选择 `HelloWorkflow`。
-3. 输入：
+3. Trigger 对话框只提供一个结构化 payload editor，默认使用 YAML。输入：
+
+```yaml
+name: Codex
+```
+
+也可以切换为 JSON：
 
 ```json
 {"name":"Codex"}
 ```
 
-4. 触发 Workflow，并打开新建的 Run。
+4. 可选填写 Run description，例如“验证第一个本地 Hello 发布”。它只说明为何启动这一次 Run，不属于 Workflow input；不要在 description 或 payload 中填写 Secret。
+5. 在只读 schema reference 中核对业务结构。Console 不会根据 schema 生成固定的 `name` 或 `subject` 表单；复杂 object 和 array 直接在 editor 中填写。
+6. 触发 Workflow，并打开新建的 Run。Console 会把 YAML 安全转换为 HTTP/JSON API 所需的 canonical JSON，再由服务端执行 schema validation。
+
+解析或 schema validation 失败时，对话框会保留原输入，并显示包含 JSON/YAML path 的错误。完整 HTTP contract 见 [启动 Workflow Run](api/start-workflow-run.md)。
 
 ### 检查点
 

@@ -99,9 +99,9 @@ func TestRunReadAPIsReturnValidatedProjectionActionLedgerAndConditionalETag(t *t
 		CurrentNodeIDs: []string{"prepare-aaaaaaaaaaaaaaaa"}, AllowedActions: []orgsdk.AllowedAction{},
 	}
 	backend := &stubControlPlane{
-		runs: []domain.Invocation{{ID: "run-1", WorkerName: "hello-worker", Workflow: "HelloWorkflow", SelectedVersion: "v1"}},
+		runs: []domain.Invocation{{ID: "run-1", WorkerName: "hello-worker", Workflow: "HelloWorkflow", SelectedVersion: "v1", Description: "Why this Run\n<script>alert(1)</script>"}},
 		invocationView: service.InvocationView{
-			Invocation:    domain.Invocation{ID: "run-1", WorkerName: "hello-worker", Workflow: "HelloWorkflow", SelectedVersion: "v1", TaskQueue: "secret-task-queue", TemporalWorkflowID: "secret-workflow-id"},
+			Invocation:    domain.Invocation{ID: "run-1", WorkerName: "hello-worker", Workflow: "HelloWorkflow", SelectedVersion: "v1", Description: "Why this Run\n<script>alert(1)</script>", TaskQueue: "secret-task-queue", TemporalWorkflowID: "secret-workflow-id"},
 			WorkerVersion: domain.WorkerVersion{WorkerName: "hello-worker", Version: "v1", Description: "First release", WorkerDeployment: "secret-worker-deployment"},
 			Execution:     service.ExecutionState{Status: "running"}, SemanticProjection: &projection,
 		},
@@ -111,7 +111,7 @@ func TestRunReadAPIsReturnValidatedProjectionActionLedgerAndConditionalETag(t *t
 
 	list := httptest.NewRecorder()
 	handler.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/runs?workerName=hello-worker", nil))
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"run-1"`) || !strings.Contains(list.Body.String(), `"executionStatus":"running"`) {
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"run-1"`) || !strings.Contains(list.Body.String(), `"executionStatus":"running"`) || !strings.Contains(list.Body.String(), `"description":"Why this Run\n\u003cscript\u003ealert(1)\u003c/script\u003e"`) {
 		t.Fatalf("runs status=%d body=%s", list.Code, list.Body.String())
 	}
 	filtered := httptest.NewRecorder()
@@ -125,7 +125,7 @@ func TestRunReadAPIsReturnValidatedProjectionActionLedgerAndConditionalETag(t *t
 	if detail.Code != http.StatusOK || detail.Header().Get("ETag") != `"projection-r7"` {
 		t.Fatalf("detail status=%d etag=%q body=%s", detail.Code, detail.Header().Get("ETag"), detail.Body.String())
 	}
-	for _, want := range []string{`"semanticProjection":`, `"projectionRevision":7`, `"actionOperations":`, `"state":"delivered"`, `"description":"First release"`} {
+	for _, want := range []string{`"semanticProjection":`, `"projectionRevision":7`, `"actionOperations":`, `"state":"delivered"`, `"description":"Why this Run\n\u003cscript\u003ealert(1)\u003c/script\u003e"`, `"description":"First release"`} {
 		if !strings.Contains(detail.Body.String(), want) {
 			t.Fatalf("detail missing %s: %s", want, detail.Body.String())
 		}

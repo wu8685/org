@@ -280,6 +280,7 @@ func TestServiceErrorsMapToStableHTTPStatus(t *testing.T) {
 		{service.ErrNotFound, http.StatusNotFound, "not_found"},
 		{service.ErrWorkerVersionExists, http.StatusConflict, "worker_version_exists"},
 		{service.ErrPublishIdempotencyConflict, http.StatusConflict, "idempotency_conflict"},
+		{service.ErrRunIdempotencyConflict, http.StatusConflict, "run_idempotency_conflict"},
 		{service.ErrConflict, http.StatusConflict, "conflict"},
 		{service.ErrTenantQuotaExceeded, http.StatusTooManyRequests, "quota_exceeded"},
 		{errors.New("bad input"), http.StatusBadRequest, "validation_failed"},

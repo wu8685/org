@@ -21,6 +21,7 @@
 | 加入人工确认和并行分支 | [Parallel Confirmation Sample](../samples/parallel-confirmation/README.md) |
 | 根据运行结果选择分支 | [Dynamic Decision Sample](../samples/dynamic-decision/README.md) |
 | 发布自己的 image | [发布 WorkerVersion](api/publish-worker-version.md) |
+| 用 JSON 或 YAML 启动一次 Run | [启动 Workflow Run](api/start-workflow-run.md) |
 | 比较三个 Sample 的学习重点 | [Sample 学习路径](../samples/README.md) |
 
 ## 理解系统
@@ -37,6 +38,7 @@
 
 - [本地开发与 E2E](development.md)
 - [API 发布请求](api/publish-worker-version.md)
+- [API 启动 Run](api/start-workflow-run.md)
 - [设计与实现规格](specs/)
 
 阅读 specs 时先检查文档顶部的状态。Draft 只表示设计输入；Approved 才能作为已授权行为的依据。较早的规格可能被后续 amendment 修订，不能脱离引用关系单独解释。

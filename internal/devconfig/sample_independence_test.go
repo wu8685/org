@@ -234,6 +234,17 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	if !strings.Contains(parallel, `{"subject":"release notes"}`) {
 		t.Errorf("parallel-confirmation README must include required Workflow input")
 	}
+	for _, relative := range []string{"docs/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+		text := read(t, filepath.Join(root, relative))
+		for _, want := range []string{"YAML", "JSON", "Run description", "可选", "schema"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing structured Trigger guidance %q", relative, want)
+			}
+		}
+		if strings.Contains(text, "Console 自动生成") || strings.Contains(text, "标准输入字段") {
+			t.Errorf("%s still implies schema-derived Trigger form controls", relative)
+		}
+	}
 	for _, relative := range []string{"samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
 		for _, want := range []string{"100m", "128Mi", "production", "Activity"} {

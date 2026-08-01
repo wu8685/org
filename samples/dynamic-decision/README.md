@@ -67,9 +67,10 @@ make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 
 1. 在 Console 创建 Worker `dynamic-decision-worker`。
 2. 用 digest 发布 Version，并等待 SDK registration、poller 与 probe。
-3. 触发 `DynamicDecisionWorkflow`，input 为 `{"mode":"concise","subject":"release notes"}`。
-4. 观察 `concise-branch=completed`、`detailed-branch=skipped` 与 `finalize=completed`。
-5. 再用 `mode=detailed` 触发独立 Run，观察相反路径。
+3. 触发 `DynamicDecisionWorkflow`。Trigger editor 默认使用 YAML，可输入 `mode: concise` 和 `subject: release notes`；切换为 JSON 时输入 `{"mode":"concise","subject":"release notes"}`。只读 schema 只描述业务 payload，不生成固定字段。
+4. 可选填写 Run description，说明为何选择这次演示输入；它不属于 payload，也不要包含 Secret。
+5. 观察 `concise-branch=completed`、`detailed-branch=skipped` 与 `finalize=completed`。
+6. 再用 `mode=detailed` 触发独立 Run，观察相反路径。
 
 Org SDK 从 typed Definition 生成 contract 并在启动时自动注册。Console 只读展示 contract 和动态 DAG，不从 Temporal Event History 猜路径。
 
