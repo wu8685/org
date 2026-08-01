@@ -62,6 +62,7 @@ make temporal-dev
 | `ORG_CONSOLE_TENANT_SLUG` | `local` | 服务端配置的本地 Tenant slug |
 | `ORG_CONSOLE_TENANT_NAME` | `Local Development` | Tenant display name |
 | `ORG_CONSOLE_PRINCIPAL_ID` | `local-developer` | 本地认证 principal |
+| `ORG_CONSOLE_PRINCIPALS` | 未设置 | 可选的 loopback local-dev principal catalog JSON；必须包含当前 authenticated principal |
 | `ORG_CONSOLE_TENANTS` | 未设置 | 可选的 loopback local-dev authorized Tenant membership JSON array；首项是默认 Tenant |
 
 Production 环境提供自己的 Kubernetes context、kubeconfig、Temporal endpoint、credential environment 和 registry allowlist。
@@ -77,6 +78,14 @@ ORG_CONSOLE_TENANTS='[{"id":"tenant-local","slug":"local","displayName":"Local D
 ```
 
 顶部 Tenant selector 只列出该 server-side catalog。选择结果按本地 session key 写入 FileStore，刷新页面和重启 Console 后仍保留；若某 membership 被移除，下一次认证安全回到首个默认 Tenant。这个配置只用于 loopback 开发，不是 production membership source。
+
+“管理 Tenants”使用 durable membership，而不是允许浏览器提交任意 Tenant ID。需要本地演示成员管理时，可在启动前声明已存在的 principal catalog：
+
+```sh
+ORG_CONSOLE_PRINCIPALS='[{"id":"local-developer","displayName":"Local Developer"},{"id":"bob","displayName":"Bob"}]' make console-dev
+```
+
+这个 local-dev catalog 只说明哪些 principal 已由平台身份系统识别；Console 不创建外部身份、不发送邀请。新 Tenant 的 creator 自动成为 owner，selector 会在服务端授权刷新后显示新 membership。API 细节见[管理 Tenants](api/manage-tenants.md)。
 
 ```sh
 ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev

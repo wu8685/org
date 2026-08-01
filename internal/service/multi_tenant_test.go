@@ -249,7 +249,7 @@ func testTenant(id, slug string) domain.Tenant {
 	return domain.Tenant{
 		ID: id, Slug: slug, DisplayName: strings.ToUpper(slug), Status: domain.TenantActive,
 		QuotaPolicy: domain.TenantQuotaPolicy{MaxReservedCPU: "4", MaxReservedMemory: "4Gi", MaxActiveWorkerPods: 8, MaxActiveReleases: 8, MaxConcurrentRuns: 8, MaxConcurrentDeployments: 2},
-		CreatedAt:   now, UpdatedAt: now,
+		Revision:    1, CreatedAt: now, UpdatedAt: now,
 	}
 }
 

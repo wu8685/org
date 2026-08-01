@@ -72,6 +72,32 @@ func TestFileStorePersistenceFailureLeavesLiveAndDiskSnapshotsUnchanged(t *testi
 	}
 }
 
+func TestFileStoreTenantCreationPersistenceFailureLeavesNoTenantMemberOrAudit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	tenant := domain.Tenant{ID: "tenant-failed", Slug: "failed-create", DisplayName: "Failed Create", Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	owner := domain.TenantMember{TenantID: tenant.ID, PrincipalID: "owner", PrincipalDisplayName: "Owner", Role: domain.TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	injected := errors.New("injected Tenant creation persistence failure")
+	store.persistSnapshot = func(fileState) error { return injected }
+	if err := store.CommitTenantCreation(tenant, owner, domain.AuditRecord{ID: "audit-create", TenantID: tenant.ID}); !errors.Is(err, injected) {
+		t.Fatalf("creation error=%v", err)
+	}
+	if _, ok := store.Tenant(tenant.ID); ok || len(store.TenantMembers(tenant.ID)) != 0 || len(store.Audits(tenant.ID)) != 0 {
+		t.Fatalf("failed creation changed live state: tenant=%v members=%#v audits=%#v", ok, store.TenantMembers(tenant.ID), store.Audits(tenant.ID))
+	}
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reopened.Tenant(tenant.ID); ok || len(reopened.TenantMembers(tenant.ID)) != 0 || len(reopened.Audits(tenant.ID)) != 0 {
+		t.Fatalf("failed creation changed disk state: tenant=%v members=%#v audits=%#v", ok, reopened.TenantMembers(tenant.ID), reopened.Audits(tenant.ID))
+	}
+}
+
 func TestFileStoreFailedQuotaReconcileReportsNoCommittedRemoval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	store, err := NewFileStore(path)

@@ -214,7 +214,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	root := filepath.Join("..", "..")
 	files := map[string][]string{
 		"README.md":                          {"Agent", "写 code", "自定义流程", "动态加载和注册", "Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/README.md", "docs/getting-started.md", "docs/concepts.md", "samples/README.md"},
-		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "architecture/overview.md", "development.md", "specs/"},
+		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "api/manage-tenants.md", "architecture/overview.md", "development.md", "specs/"},
 		"docs/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
 		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md", "Local Development", "当前 Tenant"},
 		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
@@ -286,6 +286,32 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing resource guidance %q", relative, want)
 			}
+		}
+	}
+}
+
+func TestTenantManagementDocumentationMatchesApprovedConsoleContract(t *testing.T) {
+	root := filepath.Join("..", "..")
+	api := read(t, filepath.Join(root, "docs", "api", "manage-tenants.md"))
+	for _, want := range []string{
+		"管理 Tenants", "GET /api/v1/tenants", "POST /api/v1/tenants", "If-Match", "X-CSRF-Token",
+		"immutable slug", "tenant:create", "tenant:member:manage", "最后一个 owner", "不提供删除 Tenant",
+		"ORG_CONSOLE_PRINCIPALS", "既有 platform principal", "Local Development",
+	} {
+		if !strings.Contains(api, want) {
+			t.Errorf("docs/api/manage-tenants.md missing %q", want)
+		}
+	}
+	development := read(t, filepath.Join(root, "docs", "development.md"))
+	for _, want := range []string{"ORG_CONSOLE_PRINCIPALS", "principal catalog", "不创建外部身份", "管理 Tenants"} {
+		if !strings.Contains(development, want) {
+			t.Errorf("docs/development.md missing Tenant management boundary %q", want)
+		}
+	}
+	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
+	for _, want := range []string{"管理 Tenants", "immutable slug", "quota", "member"} {
+		if !strings.Contains(gettingStarted, want) {
+			t.Errorf("docs/getting-started.md missing Tenant management guidance %q", want)
 		}
 	}
 }

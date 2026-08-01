@@ -24,6 +24,8 @@ import (
 type tenantStore interface {
 	Tenant(string) (domain.Tenant, bool)
 	SaveTenant(domain.Tenant) error
+	CommitTenantCreation(domain.Tenant, domain.TenantMember, domain.AuditRecord) error
+	CommitTenantMember(string, domain.TenantMember, int64, domain.AuditRecord) error
 }
 
 func main() {
@@ -53,6 +55,7 @@ func main() {
 	controlPlane := service.New(service.Config{
 		RegistryAllowlist: cfg.RegistryAllowlist, TemporalWebBaseURL: cfg.TemporalWebBaseURL, TemporalNamespace: cfg.TemporalNamespace,
 		BootstrapEndpoint: cfg.WorkerBootstrapEndpoint, BootstrapVerifier: service.StrictBootstrapWorkloadVerifier{},
+		PrincipalDirectory: developmentPrincipalDirectory(cfg),
 	}, store, cluster, executor)
 	promotionCtx, cancelPromotions := context.WithCancel(context.Background())
 	if err := controlPlane.StartBootstrapPromotionController(promotionCtx); err != nil {
@@ -73,7 +76,7 @@ func main() {
 	authenticator, err := console.NewSessionAuthenticator(console.SessionAuthenticatorConfig{
 		PrincipalID: cfg.ConsolePrincipalID, SessionKey: "local-development:" + cfg.ConsolePrincipalID,
 		AuthenticationMethod: "local-development", CSRFToken: randomToken(), DefaultTenantID: cfg.ConsoleTenantID,
-		Memberships: developmentMemberships(cfg), SelectionStore: store,
+		Directory: store, SelectionStore: store,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -103,30 +106,41 @@ func main() {
 }
 
 func ensureDevelopmentTenant(store tenantStore, cfg config.Config) error {
-	if _, ok := store.Tenant(cfg.ConsoleTenantID); ok {
-		return nil
-	}
-	now := time.Now().UTC()
-	return store.SaveTenant(domain.Tenant{
-		ID: cfg.ConsoleTenantID, Slug: cfg.ConsoleTenantSlug, DisplayName: cfg.ConsoleTenantName,
-		Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), CreatedAt: now, UpdatedAt: now,
-	})
+	return ensureDevelopmentTenantOwner(store, cfg, config.ConsoleTenant{ID: cfg.ConsoleTenantID, Slug: cfg.ConsoleTenantSlug, DisplayName: cfg.ConsoleTenantName})
 }
 
 func ensureDevelopmentTenants(store tenantStore, cfg config.Config) error {
 	for _, configured := range cfg.ConsoleTenants {
-		if _, ok := store.Tenant(configured.ID); ok {
-			continue
-		}
-		now := time.Now().UTC()
-		if err := store.SaveTenant(domain.Tenant{
-			ID: configured.ID, Slug: configured.Slug, DisplayName: configured.DisplayName,
-			Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), CreatedAt: now, UpdatedAt: now,
-		}); err != nil {
+		if err := ensureDevelopmentTenantOwner(store, cfg, configured); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ensureDevelopmentTenantOwner(store tenantStore, cfg config.Config, configured config.ConsoleTenant) error {
+	now := time.Now().UTC()
+	principalName := cfg.ConsolePrincipalID
+	for _, principal := range cfg.ConsolePrincipals {
+		if principal.ID == cfg.ConsolePrincipalID {
+			principalName = principal.DisplayName
+			break
+		}
+	}
+	owner := domain.TenantMember{TenantID: configured.ID, PrincipalID: cfg.ConsolePrincipalID, PrincipalDisplayName: principalName, Role: domain.TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if _, ok := store.Tenant(configured.ID); ok {
+		return store.CommitTenantMember(configured.ID, owner, 0, domain.AuditRecord{ID: "bootstrap-member:" + configured.ID + ":" + cfg.ConsolePrincipalID, TenantID: configured.ID, PrincipalID: cfg.ConsolePrincipalID, Action: "tenant.member.bootstrap", CreatedAt: now})
+	}
+	tenant := domain.Tenant{ID: configured.ID, Slug: configured.Slug, DisplayName: configured.DisplayName, Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	return store.CommitTenantCreation(tenant, owner, domain.AuditRecord{ID: "bootstrap-tenant:" + configured.ID, TenantID: configured.ID, PrincipalID: cfg.ConsolePrincipalID, Action: "tenant.bootstrap", CreatedAt: now})
+}
+
+func developmentPrincipalDirectory(cfg config.Config) service.PrincipalDirectory {
+	principals := make([]service.Principal, 0, len(cfg.ConsolePrincipals))
+	for _, principal := range cfg.ConsolePrincipals {
+		principals = append(principals, service.Principal{ID: principal.ID, DisplayName: principal.DisplayName})
+	}
+	return service.NewStaticPrincipalDirectory(principals...)
 }
 
 func developmentMemberships(cfg config.Config) []console.TenantMembership {
@@ -140,13 +154,7 @@ func developmentMemberships(cfg config.Config) []console.TenantMembership {
 }
 
 func developmentPermissions() map[string]bool {
-	return map[string]bool{
-		service.PermissionWorkerRead: true, service.PermissionWorkerCreate: true, service.PermissionWorkerDeploy: true,
-		service.PermissionWorkerVersionUpdate: true, service.PermissionRunStart: true, service.PermissionRunRead: true,
-		service.PermissionRunSignal: true, service.PermissionRunQuery: true, service.PermissionRunCancel: true,
-		service.PermissionDiagnosticsRead: true, service.PermissionAuditRead: true, service.PermissionTenantAdmin: true,
-		"run:action:confirm": true,
-	}
+	return domain.TenantRolePermissions(domain.TenantRoleOwner)
 }
 
 func developmentIdentity(cfg config.Config, csrfToken string) console.Identity {

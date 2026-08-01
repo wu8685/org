@@ -20,6 +20,7 @@
         <a href="/workers" data-nav="workers">Workers</a>
         <a href="/workflows" data-nav="workflows">Workflows</a>
         <a href="/runs" data-nav="runs">Runs</a>
+		<a href="/tenants" data-nav="tenants">管理 Tenants</a>
       </nav>
       <div class="sidebar-foot">
         <span class="avatar" aria-hidden="true">{{slice .Identity.Auth.PrincipalID 0 1}}</span>
@@ -44,6 +45,7 @@
           <span class="tenant-stable-id">Tenant stable ID · {{.Identity.Auth.TenantID}}</span>
         </div>
         {{end}}
+		<a class="btn btn-secondary tenant-manage-link" href="/tenants">管理 Tenants</a>
         <button class="icon-button" type="button" data-refresh aria-label="刷新当前页面">↻</button>
       </header>
       <main id="main" class="content" tabindex="-1">
@@ -61,6 +63,35 @@
       </main>
     </div>
   </div>
+
+  <dialog class="dialog" data-tenant-dialog aria-labelledby="tenant-dialog-title">
+    <form method="dialog" class="dialog-head"><h2 id="tenant-dialog-title" data-tenant-dialog-title>创建 Tenant</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
+    <form class="form-grid" data-tenant-form>
+      <label for="tenant-slug">Stable slug<input id="tenant-slug" name="slug" required maxlength="40" pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" autocomplete="off" aria-describedby="tenant-slug-help"></label>
+      <p id="tenant-slug-help" class="field-help">小写 DNS label；创建后不可修改。</p>
+      <label for="tenant-display-name">Display name<input id="tenant-display-name" name="displayName" required maxlength="120"></label>
+      <label for="tenant-description">Description<textarea id="tenant-description" name="description" maxlength="500" rows="4"></textarea></label>
+      <fieldset class="schema-fields" data-tenant-quota-fields><legend>Quota policy</legend>
+        <label>Reserved CPU<input name="maxReservedCPU" required></label><label>Reserved memory<input name="maxReservedMemory" required></label>
+        <label>Worker Pods<input name="maxActiveWorkerPods" type="number" min="1" required></label><label>Active releases<input name="maxActiveReleases" type="number" min="1" required></label>
+        <label>Concurrent Runs<input name="maxConcurrentRuns" type="number" min="1" required></label><label>Concurrent deployments<input name="maxConcurrentDeployments" type="number" min="1" required></label>
+      </fieldset>
+      <div class="form-error" data-tenant-error role="alert" aria-live="polite" hidden></div>
+      <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit" data-tenant-submit>创建 Tenant</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" data-member-dialog aria-labelledby="member-dialog-title">
+    <form method="dialog" class="dialog-head"><h2 id="member-dialog-title" data-member-dialog-title>添加 Tenant 成员</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
+    <form class="form-grid" data-member-form>
+      <label for="member-principal">Existing platform principal ID<input id="member-principal" name="principalId" required maxlength="120" autocomplete="off"></label>
+      <p class="field-help">org 不创建外部身份；该 ID 必须已存在于 server-side principal directory。</p>
+      <label for="member-role">Role<select id="member-role" name="role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option><option value="owner">Owner</option></select></label>
+      <p class="member-remove-warning" data-member-remove-warning hidden>移除后，该 principal 将不能再选择或读取此 Tenant。MVP 不删除 Tenant 数据。</p>
+      <div class="form-error" data-member-error role="alert" aria-live="polite" hidden></div>
+      <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit" data-member-submit>添加成员</button></div>
+    </form>
+  </dialog>
 
   <dialog class="dialog" data-worker-dialog aria-labelledby="worker-title">
     <form method="dialog" class="dialog-head"><h2 id="worker-title">创建 Worker</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>

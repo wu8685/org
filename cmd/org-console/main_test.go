@@ -4,11 +4,12 @@ import (
 	"testing"
 
 	"github.com/wu8685/org/internal/config"
+	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
 )
 
 func TestDevelopmentTenantBootstrapAndIdentityAreServerConfigured(t *testing.T) {
-	cfg := config.Config{ConsoleTenantID: "tenant-local", ConsoleTenantSlug: "local", ConsoleTenantName: "Local", ConsolePrincipalID: "developer"}
+	cfg := config.Config{ConsoleTenantID: "tenant-local", ConsoleTenantSlug: "local", ConsoleTenantName: "Local", ConsolePrincipalID: "developer", ConsolePrincipals: []config.ConsolePrincipal{{ID: "developer", DisplayName: "Developer"}}}
 	store := service.NewMemoryStore()
 	if err := ensureDevelopmentTenant(store, cfg); err != nil {
 		t.Fatal(err)
@@ -20,6 +21,9 @@ func TestDevelopmentTenantBootstrapAndIdentityAreServerConfigured(t *testing.T) 
 	if !ok || tenant.Slug != "local" {
 		t.Fatalf("tenant=%#v ok=%v", tenant, ok)
 	}
+	if member, ok := store.TenantMember("tenant-local", "developer"); !ok || member.Role != domain.TenantRoleOwner || member.PrincipalDisplayName != "Developer" {
+		t.Fatalf("bootstrap member=%#v ok=%v", member, ok)
+	}
 	identity := developmentIdentity(cfg, "csrf-random")
 	if identity.Auth.TenantID != "tenant-local" || identity.Auth.PrincipalID != "developer" || identity.CSRFToken != "csrf-random" || !identity.Auth.Permissions[service.PermissionWorkerDeploy] || !identity.Auth.Permissions[service.PermissionRunStart] || !identity.Auth.Permissions[service.PermissionRunCancel] {
 		t.Fatalf("identity=%#v", identity)
@@ -29,7 +33,8 @@ func TestDevelopmentTenantBootstrapAndIdentityAreServerConfigured(t *testing.T) 
 func TestDevelopmentTenantCatalogBootstrapsEveryAuthorizedTenant(t *testing.T) {
 	cfg := config.Config{
 		ConsoleTenantID: "tenant-a", ConsoleTenantSlug: "alpha", ConsoleTenantName: "Alpha", ConsolePrincipalID: "developer",
-		ConsoleTenants: []config.ConsoleTenant{{ID: "tenant-a", Slug: "alpha", DisplayName: "Alpha"}, {ID: "tenant-b", Slug: "beta", DisplayName: "Beta"}},
+		ConsoleTenants:    []config.ConsoleTenant{{ID: "tenant-a", Slug: "alpha", DisplayName: "Alpha"}, {ID: "tenant-b", Slug: "beta", DisplayName: "Beta"}},
+		ConsolePrincipals: []config.ConsolePrincipal{{ID: "developer", DisplayName: "Developer"}},
 	}
 	store := service.NewMemoryStore()
 	if err := ensureDevelopmentTenants(store, cfg); err != nil {
@@ -40,6 +45,9 @@ func TestDevelopmentTenantCatalogBootstrapsEveryAuthorizedTenant(t *testing.T) {
 	}
 	if tenant, ok := store.Tenant("tenant-b"); !ok || tenant.Slug != "beta" {
 		t.Fatalf("second Tenant=%#v exists=%v", tenant, ok)
+	}
+	if memberships := store.TenantMembershipsForPrincipal("developer"); len(memberships) != 2 {
+		t.Fatalf("durable memberships=%#v", memberships)
 	}
 	memberships := developmentMemberships(cfg)
 	if len(memberships) != 2 || memberships[1].TenantID != "tenant-b" || !memberships[1].Permissions[service.PermissionRunStart] {

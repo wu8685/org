@@ -11,7 +11,7 @@ func TestConsoleRoutesRenderAuthenticatedServerShellWithoutUnsupportedProductCon
 	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
 	for _, path := range []string{
 		"/", "/workers", "/workers/hello-worker", "/workers/hello-worker/versions/v1", "/workflows",
-		"/workers/hello-worker/versions/v1/workflows/HelloWorkflow", "/runs", "/runs/inv-1",
+		"/workers/hello-worker/versions/v1/workflows/HelloWorkflow", "/runs", "/runs/inv-1", "/tenants", "/tenants/studio",
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -19,7 +19,7 @@ func TestConsoleRoutesRenderAuthenticatedServerShellWithoutUnsupportedProductCon
 			t.Fatalf("GET %s status=%d headers=%v body=%s", path, response.Code, response.Header(), response.Body.String())
 		}
 		body := response.Body.String()
-		for _, want := range []string{"Workers", "Workflows", "Runs", "Alpha Studio", `data-page="`} {
+		for _, want := range []string{"Workers", "Workflows", "Runs", "管理 Tenants", "Alpha Studio", `data-page="`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("GET %s missing %q", path, want)
 			}
@@ -58,6 +58,7 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 		`<dialog class="dialog" data-worker-dialog`, `<form method="dialog" class="dialog-head">`,
 		`<form class="form-grid" data-worker-form>`, `<div class="form-actions">`, `data-dialog-close`,
 		`app.css`, `yaml-renderer.js`, `app.js`,
+		`data-tenant-dialog`, `data-tenant-form`, `data-tenant-error`, `data-member-dialog`, `data-member-form`, `data-member-error`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("shell missing %q: %s", want, body)
@@ -102,9 +103,9 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 		path  string
 		wants []string
 	}{
-		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", ".run-status-summary", ".run-failure-panel", "prefers-reduced-motion"}},
+		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", ".run-status-summary", ".run-failure-panel", ".tenant-card", ".member-actions", "prefers-reduced-motion"}},
 		{"/assets/yaml-renderer.js", []string{"YAML display unavailable", "MAX_DEPTH", "MAX_OUTPUT", "Object.keys(value).sort()", "module.exports", "canonicalJSON", "YAML parse error", "custom tags, anchors, aliases, and merge keys are disabled"}},
-		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run", "lastRunsETag", "semanticStatus", "runStatusSummary", "runFailurePanel", "errorSummary", "Failure code", "Run failed", `role: "alert"`, "Waiting for user", "Cancelled"}},
+		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run", "lastRunsETag", "semanticStatus", "runStatusSummary", "runFailurePanel", "errorSummary", "Failure code", "Run failed", `role: "alert"`, "Waiting for user", "Cancelled", "renderTenants", "renderTenant", "/api/v1/tenants", "tenantDetailETag", "openTenantDialog", "openMemberDialog", "tenant:member:manage"}},
 	}
 	for _, check := range checks {
 		response := httptest.NewRecorder()
@@ -143,9 +144,14 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 					t.Fatalf("GET %s retains schema-derived Trigger fields or JSON-only parsing %q", check.path, forbidden)
 				}
 			}
-			for _, forbidden := range []string{`tenantId:`, `?tenantId=`, `/tenants/${`} {
+			for _, forbidden := range []string{`tenantId:`, `?tenantId=`} {
 				if strings.Contains(response.Body.String(), forbidden) {
 					t.Fatalf("GET %s allows client-controlled Tenant routing %q", check.path, forbidden)
+				}
+			}
+			for _, want := range []string{`tenantDialog.addEventListener("close"`, `memberDialog.addEventListener("close"`, `tenantDialog.close(); location.reload();`, `location.href = "/tenants"`} {
+				if !strings.Contains(response.Body.String(), want) {
+					t.Fatalf("GET %s missing Tenant dialog/fallback behavior %q", check.path, want)
 				}
 			}
 		}

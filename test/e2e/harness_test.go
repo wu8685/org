@@ -130,7 +130,7 @@ func (r *acceptanceRun) tenant(suffix string) domain.Tenant {
 		ID: "tenant-e2e-" + r.id + "-" + suffix, Slug: "e2e-" + r.id + "-" + suffix,
 		DisplayName: "E2E Tenant " + strings.ToUpper(suffix), Status: domain.TenantActive,
 		QuotaPolicy: domain.TenantQuotaPolicy{MaxReservedCPU: "2", MaxReservedMemory: "2Gi", MaxActiveWorkerPods: 4, MaxActiveReleases: 4, MaxConcurrentRuns: 4, MaxConcurrentDeployments: 1},
-		CreatedAt:   now, UpdatedAt: now,
+		Revision:    1, CreatedAt: now, UpdatedAt: now,
 	}
 }
 

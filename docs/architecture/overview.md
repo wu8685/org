@@ -99,6 +99,8 @@ Tenant isolation 由 control plane 的认证、授权、命名、store、quota �
 
 Console 始终在 authenticated session 的当前 Tenant 下工作。Tenant selector 只能切换到 auth layer 授权的 membership；服务端更新 session context 后，所有 Worker、Version、Workflow、Run 与 action 路由自动使用新的 Tenant。客户端不能通过 URL 或 request body 指定任意 Tenant。
 
+Tenant management 是这条认证边界的管理面：它只枚举当前 principal 的 durable memberships，并以 server-derived role permissions 管理 display metadata、quota policy 与既有 platform principal membership。它不会创建外部身份，也不会把 Tenant 映射为 platform Temporal Namespace 或 platform Kubernetes Namespace；Worker/Run 业务入口始终继续使用 session 当前 Tenant。
+
 完整术语约束见 [org glossary](glossary.md)。
 
 ## 外部副作用
@@ -110,5 +112,6 @@ Temporal 提供可靠 retry，但不承诺外部效果 exactly once。Worker 在
 ## 继续深入
 
 - [发布 WorkerVersion](../api/publish-worker-version.md)：publish request 和状态检查。
+- [管理 Tenants](../api/manage-tenants.md)：Tenant metadata、quota 与 membership 管理边界。
 - [本地开发与 E2E](../development.md)：维护 control plane 和真实验收。
 - [`docs/specs/`](../specs/)：设计、amendment 和实现验收依据；不属于新手阅读路径。

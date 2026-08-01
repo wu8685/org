@@ -86,7 +86,9 @@ ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 
 ### 检查点
 
-页面顶部应显示当前 Tenant `Local Development` 及稳定标识，侧边栏应显示总览、Workers、Workflows 和 Runs。总览中的 quota 与后续所有资源都属于这个当前 Tenant；此时列表为空是正常的。
+页面顶部应显示当前 Tenant `Local Development` 及稳定标识，侧边栏应显示总览、Workers、Workflows、Runs 和“管理 Tenants”。总览中的 quota 与后续所有资源都属于这个当前 Tenant；此时列表为空是正常的。
+
+“管理 Tenants”可查看当前 principal 已获授权的 Tenant、quota usage/limits 和自己的 member role。具有权限时，也可创建 Tenant 或维护既有 platform principal 的 membership。新 Tenant 的 immutable slug 创建后不能修改；MVP 不提供删除 Tenant。第一次运行 Hello 不需要进入这个页面，仍可直接使用 `Local Development`。
 
 ## 第 4 步：构建 Hello Worker
 

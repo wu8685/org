@@ -36,6 +36,12 @@ type stubControlPlane struct {
 	invocationViews map[string]service.InvocationView
 	actions         []domain.ActionOperation
 	overview        service.Overview
+	tenants         []service.TenantAccessView
+	tenantView      service.TenantAccessView
+	createdTenant   service.TenantAccessView
+	updatedTenant   service.TenantAccessView
+	member          domain.TenantMember
+	removedMember   string
 	published       chan domain.WorkerVersionRequest
 	updatedVersion  domain.WorkerVersion
 	startedRun      domain.Invocation
@@ -90,6 +96,40 @@ func (c *stubControlPlane) ListRunActions(context.Context, service.Authenticated
 }
 func (c *stubControlPlane) GetOverview(context.Context, service.AuthenticatedContext) (service.Overview, error) {
 	return c.overview, c.err
+}
+func (c *stubControlPlane) ListTenants(context.Context, service.AuthenticatedContext) ([]service.TenantAccessView, error) {
+	return c.tenants, c.err
+}
+func (c *stubControlPlane) GetTenant(context.Context, service.AuthenticatedContext, string) (service.TenantAccessView, error) {
+	return c.tenantView, c.err
+}
+func (c *stubControlPlane) CreateTenant(_ context.Context, _ service.AuthenticatedContext, request service.CreateTenantRequest) (service.TenantAccessView, error) {
+	if c.err != nil {
+		return service.TenantAccessView{}, c.err
+	}
+	if c.createdTenant.Tenant.Slug == "" {
+		c.createdTenant.Tenant = domain.Tenant{ID: "tenant-created", Slug: request.Slug, DisplayName: request.DisplayName, Description: request.Description, Revision: 1}
+	}
+	return c.createdTenant, nil
+}
+func (c *stubControlPlane) UpdateTenant(_ context.Context, _ service.AuthenticatedContext, _ string, _ int64, request service.UpdateTenantRequest) (service.TenantAccessView, error) {
+	if c.err != nil {
+		return service.TenantAccessView{}, c.err
+	}
+	if c.updatedTenant.Tenant.Slug == "" {
+		c.updatedTenant.Tenant = domain.Tenant{ID: "tenant-updated", Slug: "studio", DisplayName: request.DisplayName, Description: request.Description, QuotaPolicy: request.QuotaPolicy, Revision: 2}
+	}
+	return c.updatedTenant, nil
+}
+func (c *stubControlPlane) AddTenantMember(context.Context, service.AuthenticatedContext, string, service.AddTenantMemberRequest) (domain.TenantMember, error) {
+	return c.member, c.err
+}
+func (c *stubControlPlane) UpdateTenantMemberRole(context.Context, service.AuthenticatedContext, string, string, int64, domain.TenantRole) (domain.TenantMember, error) {
+	return c.member, c.err
+}
+func (c *stubControlPlane) RemoveTenantMember(_ context.Context, _ service.AuthenticatedContext, _ string, principalID string, _ int64) error {
+	c.removedMember = principalID
+	return c.err
 }
 func (c *stubControlPlane) PublishVersion(_ context.Context, _ service.AuthenticatedContext, request domain.WorkerVersionRequest) (domain.WorkerVersion, error) {
 	if c.published != nil {

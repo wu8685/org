@@ -14,6 +14,11 @@ type ConsoleTenant struct {
 	DisplayName string `json:"displayName"`
 }
 
+type ConsolePrincipal struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
 type Config struct {
 	StateFile               string
 	TemporalAddress         string
@@ -31,6 +36,7 @@ type Config struct {
 	ConsoleTenantName       string
 	ConsolePrincipalID      string
 	ConsoleTenants          []ConsoleTenant
+	ConsolePrincipals       []ConsolePrincipal
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -55,6 +61,15 @@ func Load(getenv func(string) string) (Config, error) {
 	set(&cfg.ConsoleTenantSlug, getenv("ORG_CONSOLE_TENANT_SLUG"))
 	set(&cfg.ConsoleTenantName, getenv("ORG_CONSOLE_TENANT_NAME"))
 	set(&cfg.ConsolePrincipalID, getenv("ORG_CONSOLE_PRINCIPAL_ID"))
+	if value := strings.TrimSpace(getenv("ORG_CONSOLE_PRINCIPALS")); value != "" {
+		principals, err := decodeConsolePrincipals(value, cfg.ConsolePrincipalID)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ConsolePrincipals = principals
+	} else {
+		cfg.ConsolePrincipals = []ConsolePrincipal{{ID: cfg.ConsolePrincipalID, DisplayName: cfg.ConsolePrincipalID}}
+	}
 	if value := strings.TrimSpace(getenv("ORG_CONSOLE_TENANTS")); value != "" {
 		tenants, err := decodeConsoleTenants(value)
 		if err != nil {
@@ -78,6 +93,36 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("at least one image registry must be allowlisted")
 	}
 	return cfg, nil
+}
+
+func decodeConsolePrincipals(value, authenticatedPrincipalID string) ([]ConsolePrincipal, error) {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var principals []ConsolePrincipal
+	if err := decoder.Decode(&principals); err != nil {
+		return nil, errors.New("ORG_CONSOLE_PRINCIPALS must be a JSON array with only id and displayName")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("ORG_CONSOLE_PRINCIPALS must contain one JSON value")
+	}
+	if len(principals) == 0 {
+		return nil, errors.New("ORG_CONSOLE_PRINCIPALS must contain at least the authenticated principal")
+	}
+	ids, includesAuthenticated := map[string]bool{}, false
+	for index := range principals {
+		principals[index].ID = strings.TrimSpace(principals[index].ID)
+		principals[index].DisplayName = strings.TrimSpace(principals[index].DisplayName)
+		principal := principals[index]
+		if principal.ID == "" || principal.DisplayName == "" || ids[principal.ID] {
+			return nil, errors.New("ORG_CONSOLE_PRINCIPALS identities must be non-empty and unique")
+		}
+		ids[principal.ID] = true
+		includesAuthenticated = includesAuthenticated || principal.ID == authenticatedPrincipalID
+	}
+	if !includesAuthenticated {
+		return nil, errors.New("ORG_CONSOLE_PRINCIPALS must include ORG_CONSOLE_PRINCIPAL_ID")
+	}
+	return principals, nil
 }
 
 func decodeConsoleTenants(value string) ([]ConsoleTenant, error) {

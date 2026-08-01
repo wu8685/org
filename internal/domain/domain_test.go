@@ -26,8 +26,8 @@ func TestPublicJSONContainsWorkerNameButNoLegacyOrRuntimeRoutingIdentity(t *test
 }
 
 func TestTenantValidationAndCanonicalNamesAreStableAndCollisionSafe(t *testing.T) {
-	tenantA := Tenant{ID: "tenant-01JX0A", Slug: "acme", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	tenantB := Tenant{ID: "tenant-01JX0B", Slug: "acme-b", DisplayName: "Acme B", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	tenantA := Tenant{ID: "tenant-01JX0A", Slug: "acme", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	tenantB := Tenant{ID: "tenant-01JX0B", Slug: "acme-b", DisplayName: "Acme B", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if err := ValidateTenant(tenantA); err != nil {
 		t.Fatalf("expected valid tenant: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestTenantValidationAndCanonicalNamesAreStableAndCollisionSafe(t *testing.T
 
 func TestTenantValidationRejectsMutableOrUnsafeIdentity(t *testing.T) {
 	for _, tenant := range []Tenant{
-		{Slug: "acme", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy()},
-		{ID: "tenant-1", Slug: "ACME", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy()},
-		{ID: "tenant-1", Slug: "acme", DisplayName: "Acme", Status: "unknown", QuotaPolicy: DefaultTenantQuotaPolicy()},
+		{Slug: "acme", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1},
+		{ID: "tenant-1", Slug: "ACME", DisplayName: "Acme", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1},
+		{ID: "tenant-1", Slug: "acme", DisplayName: "Acme", Status: "unknown", QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1},
 		{ID: "tenant-1", Slug: "acme", DisplayName: "Acme", Status: TenantActive},
 	} {
 		if err := ValidateTenant(tenant); err == nil {
@@ -73,6 +73,49 @@ func TestDefaultTenantQuotaPolicyIsFinite(t *testing.T) {
 	policy := DefaultTenantQuotaPolicy()
 	if policy.MaxReservedCPU == "" || policy.MaxReservedMemory == "" || policy.MaxActiveWorkerPods <= 0 || policy.MaxActiveReleases <= 0 || policy.MaxConcurrentRuns <= 0 || policy.MaxConcurrentDeployments <= 0 {
 		t.Fatalf("unsafe default quota policy: %+v", policy)
+	}
+}
+
+func TestTenantManagementFieldsAndRolesAreValidated(t *testing.T) {
+	now := time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)
+	tenant := Tenant{ID: "tenant-managed", Slug: "managed", DisplayName: "Managed Team", Description: "Owns release\nworkflows.", Status: TenantActive, QuotaPolicy: DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err := ValidateTenant(tenant); err != nil {
+		t.Fatalf("valid managed Tenant: %v", err)
+	}
+	for name, mutate := range map[string]func(*Tenant){
+		"missing revision": func(value *Tenant) { value.Revision = 0 },
+		"long display":     func(value *Tenant) { value.DisplayName = strings.Repeat("界", 121) },
+		"display newline":  func(value *Tenant) { value.DisplayName = "Managed\nTeam" },
+		"long description": func(value *Tenant) { value.Description = strings.Repeat("界", 501) },
+		"many lines":       func(value *Tenant) { value.Description = strings.Repeat("line\n", 10) + "line" },
+		"control":          func(value *Tenant) { value.Description = "bad\u0000value" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := tenant
+			mutate(&candidate)
+			if err := ValidateTenant(candidate); err == nil {
+				t.Fatalf("invalid Tenant accepted: %#v", candidate)
+			}
+		})
+	}
+
+	member := TenantMember{TenantID: tenant.ID, PrincipalID: "principal-1", PrincipalDisplayName: "Release Owner", Role: TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err := ValidateTenantMember(member); err != nil {
+		t.Fatalf("valid member: %v", err)
+	}
+	for _, role := range []TenantRole{TenantRoleOwner, TenantRoleAdmin, TenantRoleOperator, TenantRoleViewer} {
+		permissions := TenantRolePermissions(role)
+		if !permissions["tenant:read"] {
+			t.Fatalf("role %q lacks tenant:read: %#v", role, permissions)
+		}
+	}
+	if TenantRolePermissions(TenantRoleViewer)["tenant:update"] || TenantRolePermissions(TenantRoleOperator)["tenant:member:manage"] || TenantRolePermissions(TenantRoleAdmin)["tenant:create"] || !TenantRolePermissions(TenantRoleOwner)["tenant:create"] {
+		t.Fatalf("role permissions violate management boundary")
+	}
+	invalidMember := member
+	invalidMember.Role = "root"
+	if err := ValidateTenantMember(invalidMember); err == nil {
+		t.Fatal("unknown role accepted")
 	}
 }
 

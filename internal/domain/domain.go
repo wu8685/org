@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -86,10 +87,31 @@ type Tenant struct {
 	ID          string            `json:"id"`
 	Slug        string            `json:"slug"`
 	DisplayName string            `json:"displayName"`
+	Description string            `json:"description,omitempty"`
 	Status      TenantStatus      `json:"status"`
 	QuotaPolicy TenantQuotaPolicy `json:"quotaPolicy"`
+	Revision    int64             `json:"revision"`
 	CreatedAt   time.Time         `json:"createdAt"`
 	UpdatedAt   time.Time         `json:"updatedAt"`
+}
+
+type TenantRole string
+
+const (
+	TenantRoleOwner    TenantRole = "owner"
+	TenantRoleAdmin    TenantRole = "admin"
+	TenantRoleOperator TenantRole = "operator"
+	TenantRoleViewer   TenantRole = "viewer"
+)
+
+type TenantMember struct {
+	TenantID             string     `json:"tenantId"`
+	PrincipalID          string     `json:"principalId"`
+	PrincipalDisplayName string     `json:"principalDisplayName"`
+	Role                 TenantRole `json:"role"`
+	Revision             int64      `json:"revision"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 
 type CanonicalNames struct {
@@ -111,8 +133,14 @@ func ValidateTenant(tenant Tenant) error {
 	if !tenantSlugPattern.MatchString(tenant.Slug) {
 		return errors.New("tenant slug must be a lower-case DNS label of at most 40 characters")
 	}
-	if strings.TrimSpace(tenant.DisplayName) == "" {
+	if strings.TrimSpace(tenant.DisplayName) == "" || utf8.RuneCountInString(tenant.DisplayName) > 120 || strings.ContainsAny(tenant.DisplayName, "\r\n") || containsUnsafeControl(tenant.DisplayName, false) {
 		return errors.New("tenant display name is required")
+	}
+	if utf8.RuneCountInString(tenant.Description) > 500 || strings.Count(tenant.Description, "\n") > 9 || containsUnsafeControl(tenant.Description, true) {
+		return errors.New("tenant description must be at most 500 Unicode code points and 10 lines")
+	}
+	if tenant.Revision < 1 {
+		return errors.New("tenant revision must be positive")
 	}
 	quota := tenant.QuotaPolicy
 	if !quantityPattern.MatchString(quota.MaxReservedCPU) || !quantityPattern.MatchString(quota.MaxReservedMemory) || quota.MaxReservedCPU == "0" || quota.MaxReservedCPU == "0m" || quota.MaxReservedMemory == "0" || quota.MaxActiveWorkerPods <= 0 || quota.MaxActiveReleases <= 0 || quota.MaxConcurrentRuns <= 0 || quota.MaxConcurrentDeployments <= 0 {
@@ -124,6 +152,54 @@ func ValidateTenant(tenant Tenant) error {
 	default:
 		return errors.New("tenant status is invalid")
 	}
+}
+
+func ValidateTenantMember(member TenantMember) error {
+	if strings.TrimSpace(member.TenantID) == "" || strings.TrimSpace(member.PrincipalID) == "" || strings.TrimSpace(member.PrincipalDisplayName) == "" || member.Revision < 1 {
+		return errors.New("tenant member identity and revision are required")
+	}
+	if utf8.RuneCountInString(member.PrincipalDisplayName) > 120 || strings.ContainsAny(member.PrincipalDisplayName, "\r\n") || containsUnsafeControl(member.PrincipalDisplayName, false) {
+		return errors.New("principal display name is invalid")
+	}
+	switch member.Role {
+	case TenantRoleOwner, TenantRoleAdmin, TenantRoleOperator, TenantRoleViewer:
+		return nil
+	default:
+		return errors.New("tenant member role is invalid")
+	}
+}
+
+func TenantRolePermissions(role TenantRole) map[string]bool {
+	permissions := map[string]bool{"tenant:read": true}
+	read := []string{"worker:read", "run:read", "run:query"}
+	operator := []string{"worker:create", "worker:deploy", "worker:version:update", "run:start", "run:signal", "run:cancel", "diagnostics:read", "run:action:confirm"}
+	admin := []string{"tenant:update", "tenant:member:manage", "audit:read", "tenant:admin"}
+	for _, permission := range read {
+		permissions[permission] = true
+	}
+	if role == TenantRoleOwner || role == TenantRoleAdmin || role == TenantRoleOperator {
+		for _, permission := range operator {
+			permissions[permission] = true
+		}
+	}
+	if role == TenantRoleOwner || role == TenantRoleAdmin {
+		for _, permission := range admin {
+			permissions[permission] = true
+		}
+	}
+	if role == TenantRoleOwner {
+		permissions["tenant:create"] = true
+	}
+	return permissions
+}
+
+func containsUnsafeControl(value string, allowNewline bool) bool {
+	for _, character := range value {
+		if unicode.IsControl(character) && !(allowNewline && character == '\n') {
+			return true
+		}
+	}
+	return false
 }
 
 func CanonicalNamesFor(tenant Tenant, workerName, versionID, opaqueRunID string) (CanonicalNames, error) {

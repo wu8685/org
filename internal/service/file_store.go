@@ -13,6 +13,7 @@ import (
 
 type fileState struct {
 	Tenants              map[string]domain.Tenant              `json:"tenants"`
+	TenantMembers        map[string]domain.TenantMember        `json:"tenantMembers"`
 	Workers              map[string]domain.Worker              `json:"workers"`
 	WorkerVersions       map[string]domain.WorkerVersion       `json:"workerVersions"`
 	Invocations          map[string]domain.Invocation          `json:"invocations"`
@@ -44,7 +45,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	if path == "" {
 		return nil, errors.New("state file path is required")
 	}
-	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}, WorkerVersionRouting: map[string]fileWorkerVersionRouting{}, InvocationRouting: map[string]fileInvocationRouting{}, TenantSelections: map[string]string{}}}
+	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, TenantMembers: map[string]domain.TenantMember{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}, WorkerVersionRouting: map[string]fileWorkerVersionRouting{}, InvocationRouting: map[string]fileInvocationRouting{}, TenantSelections: map[string]string{}}}
 	s.persistSnapshot = s.writeSnapshot
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -67,6 +68,9 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	if s.state.Tenants == nil {
 		s.state.Tenants = map[string]domain.Tenant{}
+	}
+	if s.state.TenantMembers == nil {
+		s.state.TenantMembers = map[string]domain.TenantMember{}
 	}
 	if s.state.Audits == nil {
 		s.state.Audits = map[string][]domain.AuditRecord{}
@@ -91,6 +95,12 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	if s.state.TenantSelections == nil {
 		s.state.TenantSelections = map[string]string{}
+	}
+	for id, tenant := range s.state.Tenants {
+		if tenant.Revision < 1 {
+			tenant.Revision = 1
+			s.state.Tenants[id] = tenant
+		}
 	}
 	hydrateFileStateRouting(&s.state)
 	return s, nil

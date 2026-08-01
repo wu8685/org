@@ -12,6 +12,7 @@
   const segments = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   let lastRunETag = "";
 	let lastRunsETag = "";
+	let tenantDetailETag = "";
   let actionContext = null;
   let runPoll = 0;
 	let runsPoll = 0;
@@ -195,6 +196,125 @@
       ["Reserved memory", `${overview.quotaUsage.reservedMemoryBytes} bytes / ${overview.quotaPolicy.maxReservedMemory}`],
     ]))));
   }
+
+	const tenantDialog = document.querySelector("[data-tenant-dialog]");
+	const tenantForm = document.querySelector("[data-tenant-form]");
+	const tenantError = document.querySelector("[data-tenant-error]");
+	const tenantQuotaFields = document.querySelector("[data-tenant-quota-fields]");
+	let tenantDialogMode = "create";
+	let tenantDialogSlug = "";
+	let tenantDialogTrigger = null;
+	function showFormError(target, error) {
+		target.textContent = error?.message || "请求失败。";
+		target.hidden = false;
+	}
+	function openTenantDialog(view = null) {
+		tenantDialogTrigger = document.activeElement;
+		tenantDialogMode = view ? "update" : "create";
+		tenantDialogSlug = view?.tenant.slug || "";
+		tenantForm.reset(); tenantError.hidden = true;
+		tenantForm.elements.slug.disabled = Boolean(view);
+		tenantQuotaFields.hidden = !view;
+		tenantQuotaFields.disabled = !view;
+		document.querySelector("[data-tenant-dialog-title]").textContent = view ? `更新 ${view.tenant.displayName}` : "创建 Tenant";
+		document.querySelector("[data-tenant-submit]").textContent = view ? "保存 Tenant" : "创建 Tenant";
+		if (view) {
+			tenantForm.elements.slug.value = view.tenant.slug;
+			tenantForm.elements.displayName.value = view.tenant.displayName;
+			tenantForm.elements.description.value = view.tenant.description || "";
+			Object.entries(view.tenant.quotaPolicy).forEach(([key, value]) => { if (tenantForm.elements[key]) tenantForm.elements[key].value = value; });
+		}
+		tenantDialog.showModal();
+		(view ? tenantForm.elements.displayName : tenantForm.elements.slug).focus();
+	}
+	tenantDialog.addEventListener("close", () => tenantDialogTrigger?.focus());
+	tenantForm.addEventListener("submit", async event => {
+		event.preventDefault(); tenantError.hidden = true;
+		if (!tenantForm.reportValidity()) return;
+		try {
+			if (tenantDialogMode === "create") {
+				const result = await api("/api/v1/tenants", {method: "POST", body: JSON.stringify({slug: tenantForm.elements.slug.value, displayName: tenantForm.elements.displayName.value, description: tenantForm.elements.description.value})});
+				tenantDialog.close(); location.href = result.redirect || `/tenants/${encodeURIComponent(result.tenant.tenant.slug)}`;
+				return;
+			}
+			const quotaPolicy = {
+				maxReservedCPU: tenantForm.elements.maxReservedCPU.value, maxReservedMemory: tenantForm.elements.maxReservedMemory.value,
+				maxActiveWorkerPods: Number(tenantForm.elements.maxActiveWorkerPods.value), maxActiveReleases: Number(tenantForm.elements.maxActiveReleases.value),
+				maxConcurrentRuns: Number(tenantForm.elements.maxConcurrentRuns.value), maxConcurrentDeployments: Number(tenantForm.elements.maxConcurrentDeployments.value),
+			};
+			await api(`/api/v1/tenants/${encodeURIComponent(tenantDialogSlug)}`, {method: "PATCH", headers: {"If-Match": tenantDetailETag}, body: JSON.stringify({displayName: tenantForm.elements.displayName.value, description: tenantForm.elements.description.value, quotaPolicy})});
+			tenantDialog.close(); location.reload();
+		} catch (error) { showFormError(tenantError, error); }
+	});
+
+	const memberDialog = document.querySelector("[data-member-dialog]");
+	const memberForm = document.querySelector("[data-member-form]");
+	const memberError = document.querySelector("[data-member-error]");
+	let memberDialogMode = "add";
+	let memberDialogTenant = "";
+	let memberDialogRevision = 0;
+	let memberDialogTrigger = null;
+	function openMemberDialog(tenantSlug, member = null, mode = "add") {
+		memberDialogTrigger = document.activeElement;
+		memberDialogMode = mode; memberDialogTenant = tenantSlug; memberDialogRevision = member?.revision || 0;
+		memberForm.reset(); memberError.hidden = true;
+		memberForm.elements.principalId.disabled = mode !== "add";
+		memberForm.elements.role.disabled = mode === "remove";
+		if (member) { memberForm.elements.principalId.value = member.principalId; memberForm.elements.role.value = member.role; }
+		document.querySelector("[data-member-remove-warning]").hidden = mode !== "remove";
+		document.querySelector("[data-member-dialog-title]").textContent = mode === "add" ? "添加 Tenant 成员" : mode === "remove" ? "移除 Tenant 成员" : "更新 Tenant role";
+		document.querySelector("[data-member-submit]").textContent = mode === "add" ? "添加成员" : mode === "remove" ? "移除成员" : "保存 role";
+		memberDialog.showModal();
+		(mode === "add" ? memberForm.elements.principalId : memberForm.elements.role).focus();
+	}
+	memberDialog.addEventListener("close", () => memberDialogTrigger?.focus());
+	memberForm.addEventListener("submit", async event => {
+		event.preventDefault(); memberError.hidden = true;
+		try {
+			const principalID = memberForm.elements.principalId.value;
+			if (memberDialogMode === "add") {
+				await api(`/api/v1/tenants/${encodeURIComponent(memberDialogTenant)}/members`, {method: "POST", body: JSON.stringify({principalId: principalID, role: memberForm.elements.role.value})});
+			} else if (memberDialogMode === "remove") {
+				await api(`/api/v1/tenants/${encodeURIComponent(memberDialogTenant)}/members/${encodeURIComponent(principalID)}`, {method: "DELETE", headers: {"If-Match": `\"member-r${memberDialogRevision}\"`}});
+				memberDialog.close(); location.href = "/tenants"; return;
+			} else {
+				await api(`/api/v1/tenants/${encodeURIComponent(memberDialogTenant)}/members/${encodeURIComponent(principalID)}`, {method: "PATCH", headers: {"If-Match": `\"member-r${memberDialogRevision}\"`}, body: JSON.stringify({role: memberForm.elements.role.value})});
+			}
+			memberDialog.close(); await renderTenant();
+		} catch (error) { showFormError(memberError, error); }
+	});
+
+	async function renderTenants() {
+		const {items} = await api("/api/v1/tenants");
+		clear(content); clear(actions);
+		if (items.some(item => item.allowedActions?.create)) actions.append(button("创建 Tenant", () => openTenantDialog()));
+		if (!items.length) return content.append(empty("当前 principal 没有可管理的 Tenant。"));
+		content.append(el("div", {class: "tenant-grid"}, items.map(view => el("article", {class: "card tenant-card"}, [
+			el("p", {class: "eyebrow", text: `Tenant · ${view.membership.role}`}), el("h2", {}, link(view.tenant.displayName, `/tenants/${encodeURIComponent(view.tenant.slug)}`)),
+			mono(view.tenant.slug), status(view.tenant.status), el("p", {class: "tenant-description", text: view.tenant.description || "暂无说明"}),
+			el("p", {class: "muted", text: `Runs ${view.quotaUsage.concurrentRuns} / ${view.tenant.quotaPolicy.maxConcurrentRuns}`}),
+		]))));
+	}
+
+	async function renderTenant() {
+		const slug = segments[1];
+		const response = await api(`/api/v1/tenants/${encodeURIComponent(slug)}`);
+		const view = response.tenant;
+		tenantDetailETag = response.etag || "";
+		clear(content); clear(actions);
+		if (view.allowedActions?.update) actions.append(button("更新 Tenant", () => openTenantDialog(view), true));
+		if (view.allowedActions?.manageMembers && view.permissions.includes("tenant:member:manage")) actions.append(button("添加成员", () => openMemberDialog(slug)));
+		content.append(el("div", {class: "grid-2"}, [
+			card([el("h2", {text: "Tenant"}), definition([["Display name", view.tenant.displayName], ["Stable slug", mono(view.tenant.slug)], ["Stable identifier", mono(view.tenant.id)], ["Status", status(view.tenant.status)], ["Description", view.tenant.description || "—"], ["Your role", view.membership.role]])]),
+			card([el("h2", {text: "Quota"}), definition([["Concurrent Runs", `${view.quotaUsage.concurrentRuns} / ${view.tenant.quotaPolicy.maxConcurrentRuns}`], ["Active releases", `${view.quotaUsage.activeReleases} / ${view.tenant.quotaPolicy.maxActiveReleases}`], ["Worker Pods", `${view.quotaUsage.activeWorkerPods} / ${view.tenant.quotaPolicy.maxActiveWorkerPods}`], ["Reserved CPU", `${view.quotaUsage.reservedCpuMilli}m / ${view.tenant.quotaPolicy.maxReservedCPU}`], ["Reserved memory", `${view.quotaUsage.reservedMemoryBytes} bytes / ${view.tenant.quotaPolicy.maxReservedMemory}`]])]),
+		]));
+		const canManage = view.allowedActions?.manageMembers;
+		content.append(section("Members", view.members?.length ? table(["Principal", "Role", "Permissions", "Actions"], view.members.map(member => {
+			const memberActions = el("div", {class: "member-actions"});
+			if (canManage) { memberActions.append(button("更新 role", () => openMemberDialog(slug, member, "edit"), true), button("移除", () => openMemberDialog(slug, member, "remove"), true)); }
+			return [el("span", {text: `${member.principalDisplayName} · ${member.principalId}`}), status(member.role), (member.permissions || []).join(", "), memberActions];
+		})) : empty("此 Tenant 暂无可见成员。")));
+	}
 
   async function renderWorkers() {
     const {items} = await api("/api/v1/workers");
@@ -608,7 +728,7 @@
 
   async function load() {
     content.setAttribute("aria-busy", "true");
-    const renderers = {overview: renderOverview, workers: renderWorkers, worker: renderWorker, version: renderVersion, workflows: renderWorkflows, workflow: renderWorkflow, runs: renderRuns, run: renderRun};
+		const renderers = {overview: renderOverview, tenants: renderTenants, tenant: renderTenant, workers: renderWorkers, worker: renderWorker, version: renderVersion, workflows: renderWorkflows, workflow: renderWorkflow, runs: renderRuns, run: renderRun};
     await renderers[page]();
     content.setAttribute("aria-busy", "false");
   }

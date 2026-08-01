@@ -33,6 +33,7 @@ type Config struct {
 	BootstrapEndpoint           string
 	PublishOperationRetention   time.Duration
 	InvocationReconcileInterval time.Duration
+	PrincipalDirectory          PrincipalDirectory
 }
 
 var (
@@ -41,7 +42,11 @@ var (
 	ErrNotFound                   = errors.New("not_found")
 	ErrTenantSuspended            = errors.New("tenant_suspended")
 	ErrTenantQuotaExceeded        = errors.New("tenant_quota_exceeded")
+	ErrLastTenantOwner            = errors.New("last_tenant_owner")
+	ErrPrincipalNotFound          = errors.New("principal_not_found")
+	ErrQuotaBelowCurrentUsage     = errors.New("quota_below_current_usage")
 	ErrConflict                   = errors.New("conflict")
+	ErrTenantSlugConflict         = fmt.Errorf("%w: tenant slug already exists", ErrConflict)
 	ErrWorkerVersionExists        = fmt.Errorf("%w: worker version already exists", ErrConflict)
 	ErrPublishIdempotencyConflict = fmt.Errorf("%w: idempotency key was already used with a different publish request", ErrConflict)
 	ErrRunIdempotencyConflict     = fmt.Errorf("%w: idempotency key was already used with a different Run start request", ErrConflict)
@@ -60,6 +65,10 @@ const (
 	PermissionAuditRead           = "audit:read"
 	PermissionDiagnosticsRead     = "diagnostics:read"
 	PermissionTenantAdmin         = "tenant:admin"
+	PermissionTenantRead          = "tenant:read"
+	PermissionTenantCreate        = "tenant:create"
+	PermissionTenantUpdate        = "tenant:update"
+	PermissionTenantMemberManage  = "tenant:member:manage"
 )
 
 type AuthenticatedContext struct {
@@ -131,9 +140,16 @@ type CreateWorkerRequest struct {
 }
 type Store interface {
 	SaveTenant(domain.Tenant) error
+	CommitTenantCreation(domain.Tenant, domain.TenantMember, domain.AuditRecord) error
+	CommitTenantUpdate(domain.Tenant, int64, domain.AuditRecord) error
+	CommitTenantMember(string, domain.TenantMember, int64, domain.AuditRecord) error
+	CommitTenantMemberRemoval(string, string, int64, domain.AuditRecord) error
 	Tenant(string) (domain.Tenant, bool)
 	TenantBySlug(string) (domain.Tenant, bool)
 	AllTenants() []domain.Tenant
+	TenantMember(string, string) (domain.TenantMember, bool)
+	TenantMembers(string) []domain.TenantMember
+	TenantMembershipsForPrincipal(string) []domain.TenantMember
 	SaveWorker(string, domain.Worker) error
 	Worker(string, string) (domain.Worker, bool)
 	Workers(string) []domain.Worker
@@ -1371,6 +1387,12 @@ func classifyError(err error) string {
 		return "tenant_suspended"
 	case errors.Is(err, ErrTenantQuotaExceeded):
 		return "tenant_quota_exceeded"
+	case errors.Is(err, ErrQuotaBelowCurrentUsage):
+		return "quota_below_current_usage"
+	case errors.Is(err, ErrLastTenantOwner):
+		return "last_tenant_owner"
+	case errors.Is(err, ErrPrincipalNotFound):
+		return "principal_not_found"
 	case errors.Is(err, ErrNotFound):
 		return "not_found"
 	case errors.Is(err, ErrConflict):
@@ -1460,6 +1482,7 @@ func newID(prefix string) string {
 type MemoryStore struct {
 	mu                   sync.RWMutex
 	tenants              map[string]domain.Tenant
+	tenantMembers        map[string]domain.TenantMember
 	workers              map[string]domain.Worker
 	versions             map[string]domain.WorkerVersion
 	invocations          map[string]domain.Invocation
@@ -1471,7 +1494,7 @@ type MemoryStore struct {
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{tenants: map[string]domain.Tenant{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}, publishOperations: map[string]domain.PublishOperation{}, bootstrapCredentials: map[string]domain.BootstrapCredential{}}
+	return &MemoryStore{tenants: map[string]domain.Tenant{}, tenantMembers: map[string]domain.TenantMember{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}, publishOperations: map[string]domain.PublishOperation{}, bootstrapCredentials: map[string]domain.BootstrapCredential{}}
 }
 
 func (s *MemoryStore) SaveBootstrapCredential(credential domain.BootstrapCredential) error {

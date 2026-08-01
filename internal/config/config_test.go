@@ -92,3 +92,36 @@ func TestConsoleAuthorizedTenantMembershipsRejectUnknownFieldsAndDuplicateIdenti
 		}
 	}
 }
+
+func TestConsolePlatformPrincipalsAreServerConfiguredAndIncludeAuthenticatedPrincipal(t *testing.T) {
+	env := map[string]string{
+		"ORG_CONSOLE_PRINCIPAL_ID": "alice",
+		"ORG_CONSOLE_PRINCIPALS":   `[{"id":"alice","displayName":"Alice"},{"id":"bob","displayName":"Bob"}]`,
+	}
+	cfg, err := Load(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ConsolePrincipals) != 2 || cfg.ConsolePrincipals[0].ID != "alice" || cfg.ConsolePrincipals[1].DisplayName != "Bob" {
+		t.Fatalf("principals=%#v", cfg.ConsolePrincipals)
+	}
+	for _, value := range []string{
+		`[{"id":"bob","displayName":"Bob"}]`,
+		`[{"id":"alice","displayName":"Alice","email":"forged@example.com"}]`,
+		`[{"id":"alice","displayName":"Alice"},{"id":"alice","displayName":"Duplicate"}]`,
+	} {
+		_, err := Load(func(key string) string {
+			switch key {
+			case "ORG_CONSOLE_PRINCIPAL_ID":
+				return "alice"
+			case "ORG_CONSOLE_PRINCIPALS":
+				return value
+			default:
+				return ""
+			}
+		})
+		if err == nil {
+			t.Fatalf("invalid principal catalog accepted: %s", value)
+		}
+	}
+}

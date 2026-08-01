@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -243,6 +244,67 @@ func TestRunListSemanticStatusFollowsSelectedTenantWithoutCrossTalk(t *testing.T
 	handler.ServeHTTP(beta, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))
 	if beta.Code != http.StatusOK || !strings.Contains(beta.Body.String(), "description-for-beta") || !strings.Contains(beta.Body.String(), "Current node for beta") || strings.Contains(beta.Body.String(), "alpha") || backend.lastAuth.TenantID != "tenant-b" {
 		t.Fatalf("beta auth=%#v status=%d body=%s", backend.lastAuth, beta.Code, beta.Body.String())
+	}
+}
+
+func TestSessionAuthenticatorRefreshesDurableTenantMembershipsAndSafelyFallsBack(t *testing.T) {
+	store := service.NewMemoryStore()
+	now := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC)
+	local := domain.Tenant{ID: "tenant-local", Slug: "local", DisplayName: "Local Development", Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	localOwner := domain.TenantMember{TenantID: local.ID, PrincipalID: "alice", PrincipalDisplayName: "Alice", Role: domain.TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CommitTenantCreation(local, localOwner, domain.AuditRecord{ID: "bootstrap-local", TenantID: local.ID}); err != nil {
+		t.Fatal(err)
+	}
+	selections := &memoryTenantSelectionStore{selected: map[string]string{}}
+	authenticator, err := NewSessionAuthenticator(SessionAuthenticatorConfig{
+		PrincipalID: "alice", SessionKey: "session-alice", AuthenticationMethod: "test", CSRFToken: "csrf", DefaultTenantID: local.ID,
+		Directory: store, SelectionStore: selections,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := authenticator.Authenticate(httptest.NewRequest(http.MethodGet, "/", nil))
+	if err != nil || identity.Auth.TenantID != local.ID || len(identity.AuthorizedTenants) != 1 || !identity.Auth.Permissions[service.PermissionTenantCreate] {
+		t.Fatalf("initial identity=%#v err=%v", identity, err)
+	}
+
+	studio := domain.Tenant{ID: "tenant-studio", Slug: "studio", DisplayName: "Studio", Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	studioOwner := domain.TenantMember{TenantID: studio.ID, PrincipalID: "alice", PrincipalDisplayName: "Alice", Role: domain.TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CommitTenantCreation(studio, studioOwner, domain.AuditRecord{ID: "create-studio", TenantID: studio.ID}); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := authenticator.SelectTenant(httptest.NewRequest(http.MethodPost, "/api/v1/session/tenant", nil), "studio")
+	if err != nil || selected.Auth.TenantID != studio.ID || len(selected.AuthorizedTenants) != 2 {
+		t.Fatalf("dynamic selection=%#v err=%v", selected, err)
+	}
+	studio.DisplayName, studio.Revision = "Studio Team", 2
+	if err := store.CommitTenantUpdate(studio, 1, domain.AuditRecord{ID: "update-studio", TenantID: studio.ID}); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := authenticator.Authenticate(httptest.NewRequest(http.MethodGet, "/", nil))
+	if err != nil || refreshed.TenantDisplayName != "Studio Team" {
+		t.Fatalf("refreshed identity=%#v err=%v", refreshed, err)
+	}
+
+	if err := store.CommitTenantMemberRemoval(studio.ID, "alice", 1, domain.AuditRecord{ID: "remove-studio", TenantID: studio.ID}); !errors.Is(err, service.ErrLastTenantOwner) {
+		t.Fatalf("last owner protection=%v", err)
+	}
+	bobOwner := domain.TenantMember{TenantID: studio.ID, PrincipalID: "bob", PrincipalDisplayName: "Bob", Role: domain.TenantRoleOwner, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CommitTenantMember(studio.ID, bobOwner, 0, domain.AuditRecord{ID: "add-bob", TenantID: studio.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitTenantMemberRemoval(studio.ID, "alice", 1, domain.AuditRecord{ID: "remove-alice", TenantID: studio.ID}); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := authenticator.Authenticate(httptest.NewRequest(http.MethodGet, "/", nil))
+	if err != nil || fallback.Auth.TenantID != local.ID || len(fallback.AuthorizedTenants) != 1 {
+		t.Fatalf("fallback identity=%#v err=%v", fallback, err)
+	}
+	if selectedID, ok := selections.TenantSelection("session-alice"); !ok || selectedID != local.ID {
+		t.Fatalf("durable fallback=%q %v", selectedID, ok)
+	}
+	if _, err := authenticator.SelectTenant(httptest.NewRequest(http.MethodPost, "/api/v1/session/tenant", nil), "studio"); !errors.Is(err, service.ErrPermissionDenied) {
+		t.Fatalf("removed membership selected=%v", err)
 	}
 }
 

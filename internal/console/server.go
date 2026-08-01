@@ -40,6 +40,11 @@ type TenantSelectionStore interface {
 	SaveTenantSelection(string, string) error
 }
 
+type TenantMembershipDirectory interface {
+	Tenant(string) (domain.Tenant, bool)
+	TenantMembershipsForPrincipal(string) []domain.TenantMember
+}
+
 type SessionAuthenticatorConfig struct {
 	PrincipalID          string
 	SessionKey           string
@@ -47,6 +52,7 @@ type SessionAuthenticatorConfig struct {
 	CSRFToken            string
 	DefaultTenantID      string
 	Memberships          []TenantMembership
+	Directory            TenantMembershipDirectory
 	SelectionStore       TenantSelectionStore
 }
 
@@ -75,37 +81,71 @@ func NewSessionAuthenticator(config SessionAuthenticatorConfig) (*SessionAuthent
 		authenticator.membersByID[membership.TenantID] = membership
 		authenticator.membersBySlug[membership.TenantSlug] = membership
 	}
-	if _, exists := authenticator.membersByID[config.DefaultTenantID]; !exists {
-		return nil, errors.New("default Tenant must be an authorized membership")
+	if config.Directory == nil {
+		if _, exists := authenticator.membersByID[config.DefaultTenantID]; !exists {
+			return nil, errors.New("default Tenant must be an authorized membership")
+		}
+	} else if memberships, _ := authenticator.currentMemberships(); len(memberships) == 0 {
+		return nil, errors.New("principal must have at least one authorized Tenant membership")
 	}
 	return authenticator, nil
 }
 
 func (a *SessionAuthenticator) Authenticate(*http.Request) (Identity, error) {
+	membersByID, _ := a.currentMemberships()
+	if len(membersByID) == 0 {
+		return Identity{}, service.ErrUnauthenticated
+	}
 	selected, ok := a.config.SelectionStore.TenantSelection(a.config.SessionKey)
-	if _, authorized := a.membersByID[selected]; !ok || !authorized {
-		selected = a.config.DefaultTenantID
+	if _, authorized := membersByID[selected]; !ok || !authorized {
+		if _, defaultAuthorized := membersByID[a.config.DefaultTenantID]; defaultAuthorized {
+			selected = a.config.DefaultTenantID
+		} else {
+			ids := make([]string, 0, len(membersByID))
+			for id := range membersByID {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			selected = ids[0]
+		}
 		if err := a.config.SelectionStore.SaveTenantSelection(a.config.SessionKey, selected); err != nil {
 			return Identity{}, err
 		}
 	}
-	return a.identity(a.membersByID[selected]), nil
+	return a.identity(membersByID, membersByID[selected]), nil
 }
 
 func (a *SessionAuthenticator) SelectTenant(_ *http.Request, tenantSlug string) (Identity, error) {
-	membership, ok := a.membersBySlug[tenantSlug]
+	membersByID, membersBySlug := a.currentMemberships()
+	membership, ok := membersBySlug[tenantSlug]
 	if !ok {
 		return Identity{}, service.ErrPermissionDenied
 	}
 	if err := a.config.SelectionStore.SaveTenantSelection(a.config.SessionKey, membership.TenantID); err != nil {
 		return Identity{}, err
 	}
-	return a.identity(membership), nil
+	return a.identity(membersByID, membership), nil
 }
 
-func (a *SessionAuthenticator) identity(selected TenantMembership) Identity {
-	memberships := make([]TenantMembership, 0, len(a.membersByID))
-	for _, membership := range a.membersByID {
+func (a *SessionAuthenticator) currentMemberships() (map[string]TenantMembership, map[string]TenantMembership) {
+	if a.config.Directory == nil {
+		return a.membersByID, a.membersBySlug
+	}
+	membersByID, membersBySlug := map[string]TenantMembership{}, map[string]TenantMembership{}
+	for _, member := range a.config.Directory.TenantMembershipsForPrincipal(a.config.PrincipalID) {
+		tenant, ok := a.config.Directory.Tenant(member.TenantID)
+		if !ok {
+			continue
+		}
+		membership := TenantMembership{TenantID: tenant.ID, TenantSlug: tenant.Slug, DisplayName: tenant.DisplayName, Permissions: domain.TenantRolePermissions(member.Role)}
+		membersByID[tenant.ID], membersBySlug[tenant.Slug] = membership, membership
+	}
+	return membersByID, membersBySlug
+}
+
+func (a *SessionAuthenticator) identity(membersByID map[string]TenantMembership, selected TenantMembership) Identity {
+	memberships := make([]TenantMembership, 0, len(membersByID))
+	for _, membership := range membersByID {
 		membership.Permissions = nil
 		memberships = append(memberships, membership)
 	}
@@ -156,6 +196,13 @@ func (a StaticAuthenticator) Authenticate(*http.Request) (Identity, error) {
 }
 
 type ControlPlane interface {
+	ListTenants(context.Context, service.AuthenticatedContext) ([]service.TenantAccessView, error)
+	GetTenant(context.Context, service.AuthenticatedContext, string) (service.TenantAccessView, error)
+	CreateTenant(context.Context, service.AuthenticatedContext, service.CreateTenantRequest) (service.TenantAccessView, error)
+	UpdateTenant(context.Context, service.AuthenticatedContext, string, int64, service.UpdateTenantRequest) (service.TenantAccessView, error)
+	AddTenantMember(context.Context, service.AuthenticatedContext, string, service.AddTenantMemberRequest) (domain.TenantMember, error)
+	UpdateTenantMemberRole(context.Context, service.AuthenticatedContext, string, string, int64, domain.TenantRole) (domain.TenantMember, error)
+	RemoveTenantMember(context.Context, service.AuthenticatedContext, string, string, int64) error
 	CreateWorker(context.Context, service.AuthenticatedContext, service.CreateWorkerRequest) (domain.Worker, error)
 	ListWorkers(context.Context, service.AuthenticatedContext) ([]domain.Worker, error)
 	GetWorker(context.Context, service.AuthenticatedContext, string) (service.WorkerView, error)
@@ -228,6 +275,17 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 		s.session(response, requestID, identity)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/session/tenant":
 		s.selectTenant(response, request, requestID)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/tenants":
+		s.listTenants(response, request, requestID, identity)
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/tenants":
+		s.createTenant(response, request, requestID, identity)
+	case request.Method == http.MethodPost && tenantMembersPath(request.URL.Path) != "":
+		s.addTenantMember(response, request, requestID, identity, tenantMembersPath(request.URL.Path))
+	case (request.Method == http.MethodPatch || request.Method == http.MethodDelete) && tenantMemberPath(request.URL.Path):
+		tenantSlug, principalID := tenantMemberPathParts(request.URL.Path)
+		s.mutateTenantMember(response, request, requestID, identity, tenantSlug, principalID)
+	case (request.Method == http.MethodGet || request.Method == http.MethodPatch) && tenantPath(request.URL.Path) != "":
+		s.tenantResource(response, request, requestID, identity, tenantPath(request.URL.Path))
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/overview":
 		s.overview(response, request, requestID, identity)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/workers":
@@ -269,6 +327,124 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 	default:
 		writeAPIError(response, http.StatusNotFound, "not_found", "Resource not found", requestID)
 	}
+}
+
+func (s *server) listTenants(response http.ResponseWriter, request *http.Request, requestID string, identity Identity) {
+	views, err := s.controlPlane.ListTenants(request.Context(), identity.Auth)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	encoded, err := json.Marshal(views)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	digest := sha256.Sum256(append([]byte(identity.Auth.PrincipalID+"\x00"), encoded...))
+	etag := `"tenants-` + hex.EncodeToString(digest[:]) + `"`
+	if conditionalNotModified(response, request, etag) {
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "items": views})
+}
+
+func (s *server) createTenant(response http.ResponseWriter, request *http.Request, requestID string, identity Identity) {
+	var input service.CreateTenantRequest
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
+		return
+	}
+	view, err := s.controlPlane.CreateTenant(request.Context(), identity.Auth, input)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	if selector, ok := s.authenticator.(tenantSelector); ok {
+		if _, err := selector.SelectTenant(request, view.Tenant.Slug); err != nil {
+			writeError(response, requestID, err)
+			return
+		}
+	}
+	location := "/tenants/" + view.Tenant.Slug
+	response.Header().Set("Location", location)
+	response.Header().Set("ETag", tenantETag(view))
+	writeJSON(response, http.StatusCreated, map[string]any{"requestId": requestID, "tenant": view, "redirect": location})
+}
+
+func (s *server) tenantResource(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, tenantSlug string) {
+	if request.Method == http.MethodGet {
+		view, err := s.controlPlane.GetTenant(request.Context(), identity.Auth, tenantSlug)
+		if err != nil {
+			writeError(response, requestID, err)
+			return
+		}
+		etag := tenantETag(view)
+		if conditionalNotModified(response, request, etag) {
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "tenant": view})
+		return
+	}
+	expectedRevision, ok := requireEntityETag(response, request, requestID, "tenant", "Tenant")
+	if !ok {
+		return
+	}
+	var input service.UpdateTenantRequest
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
+		return
+	}
+	view, err := s.controlPlane.UpdateTenant(request.Context(), identity.Auth, tenantSlug, expectedRevision, input)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	response.Header().Set("ETag", tenantETag(view))
+	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "tenant": view})
+}
+
+func (s *server) addTenantMember(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, tenantSlug string) {
+	var input service.AddTenantMemberRequest
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
+		return
+	}
+	member, err := s.controlPlane.AddTenantMember(request.Context(), identity.Auth, tenantSlug, input)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	response.Header().Set("ETag", memberETag(member))
+	writeJSON(response, http.StatusCreated, map[string]any{"requestId": requestID, "member": member})
+}
+
+func (s *server) mutateTenantMember(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, tenantSlug, principalID string) {
+	expectedRevision, ok := requireEntityETag(response, request, requestID, "member", "Tenant member")
+	if !ok {
+		return
+	}
+	if request.Method == http.MethodDelete {
+		if err := s.controlPlane.RemoveTenantMember(request.Context(), identity.Auth, tenantSlug, principalID, expectedRevision); err != nil {
+			writeError(response, requestID, err)
+			return
+		}
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var input struct {
+		Role domain.TenantRole `json:"role"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
+		return
+	}
+	member, err := s.controlPlane.UpdateTenantMemberRole(request.Context(), identity.Auth, tenantSlug, principalID, expectedRevision, input.Role)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	response.Header().Set("ETag", memberETag(member))
+	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "member": member})
 }
 
 type publishVersionInput struct {
@@ -773,6 +949,35 @@ func pathParts(path string) []string {
 	return strings.Split(strings.Trim(path, "/"), "/")
 }
 
+func tenantPath(path string) string {
+	parts := pathParts(path)
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "tenants" && parts[3] != "" {
+		return parts[3]
+	}
+	return ""
+}
+
+func tenantMembersPath(path string) string {
+	parts := pathParts(path)
+	if len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "tenants" && parts[3] != "" && parts[4] == "members" {
+		return parts[3]
+	}
+	return ""
+}
+
+func tenantMemberPath(path string) bool {
+	tenantSlug, principalID := tenantMemberPathParts(path)
+	return tenantSlug != "" && principalID != ""
+}
+
+func tenantMemberPathParts(path string) (string, string) {
+	parts := pathParts(path)
+	if len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "tenants" && parts[3] != "" && parts[4] == "members" && parts[5] != "" {
+		return parts[3], parts[5]
+	}
+	return "", ""
+}
+
 func operationPath(path string) string {
 	parts := pathParts(path)
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "operations" && parts[3] != "" {
@@ -953,6 +1158,43 @@ func versionETag(version domain.WorkerVersion) string {
 	return `"version-` + version.Version + `-r` + int64String(version.Revision) + `"`
 }
 
+func tenantETag(view service.TenantAccessView) string {
+	material, _ := json.Marshal(struct {
+		Revision int64
+		Usage    service.QuotaUsage
+		Members  []service.TenantMemberView
+	}{view.Tenant.Revision, view.QuotaUsage, view.Members})
+	digest := sha256.Sum256(material)
+	return `"tenant-r` + int64String(view.Tenant.Revision) + `-` + hex.EncodeToString(digest[:8]) + `"`
+}
+
+func memberETag(member domain.TenantMember) string {
+	return `"member-r` + int64String(member.Revision) + `"`
+}
+
+func requireEntityETag(response http.ResponseWriter, request *http.Request, requestID, entity, label string) (int64, bool) {
+	etag := request.Header.Get("If-Match")
+	if etag == "" {
+		writeAPIError(response, http.StatusPreconditionRequired, "precondition_required", "If-Match is required", requestID)
+		return 0, false
+	}
+	prefix := `"` + entity + `-r`
+	if !strings.HasPrefix(etag, prefix) || !strings.HasSuffix(etag, `"`) {
+		writeAPIError(response, http.StatusPreconditionFailed, "precondition_failed", "If-Match does not identify this "+label+" revision", requestID)
+		return 0, false
+	}
+	revisionText := strings.TrimSuffix(strings.TrimPrefix(etag, prefix), `"`)
+	if separator := strings.IndexByte(revisionText, '-'); separator >= 0 {
+		revisionText = revisionText[:separator]
+	}
+	revision, err := strconv.ParseInt(revisionText, 10, 64)
+	if err != nil || revision < 1 {
+		writeAPIError(response, http.StatusPreconditionFailed, "precondition_failed", "If-Match does not identify this "+label+" revision", requestID)
+		return 0, false
+	}
+	return revision, true
+}
+
 func parseVersionETag(etag, version string) (int64, bool) {
 	prefix := `"version-` + version + `-r`
 	if !strings.HasPrefix(etag, prefix) || !strings.HasSuffix(etag, `"`) {
@@ -1088,6 +1330,8 @@ func httpError(err error) (int, string, string) {
 		return http.StatusUnauthorized, "unauthenticated", "Authentication is required"
 	case errors.Is(err, service.ErrPermissionDenied):
 		return http.StatusForbidden, "permission_denied", "Permission denied"
+	case errors.Is(err, service.ErrPrincipalNotFound):
+		return http.StatusNotFound, "principal_not_found", "Platform principal was not found"
 	case errors.Is(err, service.ErrNotFound):
 		return http.StatusNotFound, "not_found", "Resource not found"
 	case errors.Is(err, service.ErrWorkerVersionExists):
@@ -1096,6 +1340,12 @@ func httpError(err error) (int, string, string) {
 		return http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used with a different publish request"
 	case errors.Is(err, service.ErrRunIdempotencyConflict):
 		return http.StatusConflict, "run_idempotency_conflict", "Idempotency-Key was already used with a different Run start request"
+	case errors.Is(err, service.ErrTenantSlugConflict):
+		return http.StatusConflict, "tenant_slug_conflict", "Tenant slug is already in use"
+	case errors.Is(err, service.ErrLastTenantOwner):
+		return http.StatusConflict, "last_tenant_owner", "At least one Tenant owner must remain"
+	case errors.Is(err, service.ErrQuotaBelowCurrentUsage):
+		return http.StatusConflict, "quota_below_current_usage", "Quota limits cannot be lower than current usage"
 	case errors.Is(err, service.ErrConflict):
 		return http.StatusConflict, "conflict", "Resource state conflicts with the request"
 	case errors.Is(err, service.ErrTenantQuotaExceeded):

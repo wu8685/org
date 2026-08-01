@@ -32,6 +32,10 @@ func consoleRoute(path string) (consolePage, bool) {
 	switch {
 	case path == "/":
 		return consolePage{Page: "overview", Title: "总览", Description: "查看当前 Tenant 的运行概况与资源使用。", Breadcrumb: []breadcrumbItem{{Label: "总览", Current: true}}}, true
+	case path == "/tenants":
+		return consolePage{Page: "tenants", Title: "管理 Tenants", Description: "查看你有权限访问的 Tenant、quota 与成员。", Breadcrumb: []breadcrumbItem{{Label: "管理 Tenants", Current: true}}}, true
+	case len(parts) == 2 && parts[0] == "tenants" && parts[1] != "":
+		return consolePage{Page: "tenant", Title: parts[1], Description: "管理该 Tenant 的显示信息、quota policy 与既有 platform principal membership。", Breadcrumb: []breadcrumbItem{{Label: "管理 Tenants", Href: "/tenants"}, {Label: parts[1], Current: true}}}, true
 	case path == "/workers":
 		return consolePage{Page: "workers", Title: "Workers", Description: "管理当前 Tenant 的逻辑 Worker 及其独立版本。", Breadcrumb: []breadcrumbItem{{Label: "Workers", Current: true}}}, true
 	case len(parts) == 2 && parts[0] == "workers" && parts[1] != "":
