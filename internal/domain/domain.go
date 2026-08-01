@@ -15,7 +15,7 @@ import (
 
 var (
 	namePattern           = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`)
-	digestPattern         = regexp.MustCompile(`^[^/@\s]+(?:/[^/@\s]+)+@sha256:[a-fA-F0-9]{64}$`)
+	digestPattern         = regexp.MustCompile(`^[^/@:\s]+(?::[0-9]+)?/(?:[^/@:\s]+/)*[^/@:\s]+@sha256:[a-f0-9]{64}$`)
 	manifestDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 	commitPattern         = regexp.MustCompile(`^[a-fA-F0-9]{7,64}$`)
 	versionPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
@@ -176,6 +176,36 @@ const (
 	WorkerVersionFailed  WorkerVersionState = "failed"
 )
 
+type BootstrapRegistrationStatus string
+
+const (
+	BootstrapRegistrationAwaiting BootstrapRegistrationStatus = "awaiting-registration"
+	BootstrapRegistrationAccepted BootstrapRegistrationStatus = "accepted"
+	BootstrapRegistrationRejected BootstrapRegistrationStatus = "rejected"
+)
+
+type BootstrapBinding struct {
+	TenantID               string    `json:"tenantId"`
+	TenantSlug             string    `json:"tenantSlug"`
+	WorkerName             string    `json:"workerName"`
+	WorkerVersionID        string    `json:"workerVersionId"`
+	Version                string    `json:"version"`
+	ExpectedImage          string    `json:"expectedImage"`
+	ExpectedServiceAccount string    `json:"expectedServiceAccount"`
+	DeploymentGeneration   string    `json:"deploymentGeneration"`
+	ExpiresAt              time.Time `json:"expiresAt"`
+}
+
+type BootstrapCredential struct {
+	TokenHash       string           `json:"tokenHash"`
+	Binding         BootstrapBinding `json:"binding"`
+	RegistrationKey string           `json:"registrationKey,omitempty"`
+	ReceiptID       string           `json:"receiptId,omitempty"`
+	AcceptedAt      *time.Time       `json:"acceptedAt,omitempty"`
+	ReceiptUntil    *time.Time       `json:"receiptUntil,omitempty"`
+	Revoked         bool             `json:"revoked"`
+}
+
 type WorkerVersionRequest struct {
 	WorkerName     string           `json:"workerName"`
 	Description    string           `json:"description"`
@@ -186,6 +216,25 @@ type WorkerVersionRequest struct {
 	Metadata       WorkerMetadata   `json:"metadata"`
 	Runtime        RuntimeSpec      `json:"runtime"`
 	Source         SourceProvenance `json:"source"`
+}
+
+// WorkerVersionPublishRequest is the user-facing release input. The SDK
+// contract is deliberately absent and can only arrive through bootstrap
+// registration from the deployed candidate runtime.
+type WorkerVersionPublishRequest struct {
+	WorkerName    string           `json:"-"`
+	Description   string           `json:"description"`
+	Image         string           `json:"image"`
+	Version       string           `json:"version"`
+	VersionConfig json.RawMessage  `json:"versionConfig,omitempty"`
+	Runtime       RuntimeSpec      `json:"runtime"`
+	Source        SourceProvenance `json:"source"`
+}
+
+type WorkerContractRegistration struct {
+	ManifestDigest string         `json:"manifestDigest"`
+	Metadata       WorkerMetadata `json:"contract"`
+	BuildID        string         `json:"buildId"`
 }
 type WorkerMetadata struct {
 	ContractVersion        string             `json:"contractVersion,omitempty"`
@@ -324,33 +373,35 @@ type Worker struct {
 }
 
 type WorkerVersion struct {
-	ID                       string              `json:"id"`
-	TenantID                 string              `json:"tenantId"`
-	TenantSlug               string              `json:"tenantSlug"`
-	WorkerName               string              `json:"workerName"`
-	Description              string              `json:"description"`
-	Revision                 int64               `json:"revision"`
-	Image                    string              `json:"image"`
-	Version                  string              `json:"version"`
-	ManifestDigest           string              `json:"manifestDigest,omitempty"`
-	VersionConfig            json.RawMessage     `json:"versionConfig,omitempty"`
-	Metadata                 WorkerMetadata      `json:"metadata"`
-	Runtime                  RuntimeSpec         `json:"runtime"`
-	Source                   SourceProvenance    `json:"source"`
-	TaskQueue                string              `json:"-"`
-	WorkerDeployment         string              `json:"-"`
-	KubernetesDeployment     string              `json:"-"`
-	KubernetesServiceAccount string              `json:"-"`
-	KubernetesNetworkPolicy  string              `json:"-"`
-	TenantHash               string              `json:"-"`
-	VersionHash              string              `json:"-"`
-	State                    WorkerVersionState  `json:"state"`
-	Health                   WorkerVersionHealth `json:"health"`
-	Current                  bool                `json:"current"`
-	Actor                    string              `json:"actor"`
-	CreatedAt                time.Time           `json:"createdAt"`
-	UpdatedAt                time.Time           `json:"updatedAt"`
-	Failure                  string              `json:"failure,omitempty"`
+	ID                       string                      `json:"id"`
+	TenantID                 string                      `json:"tenantId"`
+	TenantSlug               string                      `json:"tenantSlug"`
+	WorkerName               string                      `json:"workerName"`
+	Description              string                      `json:"description"`
+	Revision                 int64                       `json:"revision"`
+	Image                    string                      `json:"image"`
+	Version                  string                      `json:"version"`
+	ManifestDigest           string                      `json:"manifestDigest,omitempty"`
+	VersionConfig            json.RawMessage             `json:"versionConfig,omitempty"`
+	Metadata                 WorkerMetadata              `json:"metadata"`
+	Runtime                  RuntimeSpec                 `json:"runtime"`
+	Source                   SourceProvenance            `json:"source"`
+	TaskQueue                string                      `json:"-"`
+	WorkerDeployment         string                      `json:"-"`
+	KubernetesDeployment     string                      `json:"-"`
+	KubernetesServiceAccount string                      `json:"-"`
+	KubernetesNetworkPolicy  string                      `json:"-"`
+	TenantHash               string                      `json:"-"`
+	VersionHash              string                      `json:"-"`
+	State                    WorkerVersionState          `json:"state"`
+	Health                   WorkerVersionHealth         `json:"health"`
+	Current                  bool                        `json:"current"`
+	Actor                    string                      `json:"actor"`
+	CreatedAt                time.Time                   `json:"createdAt"`
+	UpdatedAt                time.Time                   `json:"updatedAt"`
+	Failure                  string                      `json:"failure,omitempty"`
+	RegistrationStatus       BootstrapRegistrationStatus `json:"registrationStatus,omitempty"`
+	RegisteredAt             *time.Time                  `json:"registeredAt,omitempty"`
 }
 type Invocation struct {
 	ID                 string          `json:"id"`
@@ -427,6 +478,12 @@ type StepProjection struct {
 }
 
 func ValidateWorkerVersion(req WorkerVersionRequest, allowlist []string) error {
+	if req.ManifestDigest == "" && len(req.Metadata.Workflows) == 0 && len(req.Metadata.Activities) == 0 {
+		return ValidateWorkerVersionPublish(WorkerVersionPublishRequest{
+			WorkerName: req.WorkerName, Description: req.Description, Image: req.Image, Version: req.Version,
+			VersionConfig: req.VersionConfig, Runtime: req.Runtime, Source: req.Source,
+		}, allowlist)
+	}
 	var problems []string
 	if !namePattern.MatchString(req.WorkerName) || strings.Contains(req.WorkerName, ".") || !versionPattern.MatchString(req.Version) {
 		problems = append(problems, "workerName and version must be safe names")
@@ -545,6 +602,92 @@ func ValidateWorkerVersion(req WorkerVersionRequest, allowlist []string) error {
 	}
 	if req.Source.CIReference == "" {
 		problems = append(problems, "source CI reference is required")
+	}
+	if len(problems) != 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func ValidateWorkerVersionPublish(req WorkerVersionPublishRequest, allowlist []string) error {
+	var problems []string
+	if err := ValidateWorkerName(req.WorkerName); err != nil || !versionPattern.MatchString(req.Version) {
+		problems = append(problems, "workerName and version must be safe names")
+	}
+	if err := ValidateDescription(req.Description); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if !digestPattern.MatchString(req.Image) {
+		problems = append(problems, "image must be a canonical immutable platform image digest without a tag")
+	} else if !registryAllowed(req.Image, allowlist) {
+		problems = append(problems, "image registry is not allowlisted")
+	}
+	if len(req.VersionConfig) != 0 {
+		if len(req.VersionConfig) > 64<<10 {
+			problems = append(problems, "versionConfig exceeds 64 KiB")
+		} else {
+			var config map[string]any
+			if err := json.Unmarshal(req.VersionConfig, &config); err != nil || config == nil {
+				problems = append(problems, "versionConfig must be a JSON object")
+			} else {
+				for _, forbidden := range []string{"scope", "tenantId", "tenantSlug", "workerName", "taskQueue", "workerDeployment", "workflowId", "temporalNamespace", "kubernetesNamespace", "manifest", "metadata", "contract", "manifestDigest", "buildId"} {
+					if _, exists := config[forbidden]; exists {
+						problems = append(problems, "versionConfig must not override product, routing, or contract identity")
+						break
+					}
+				}
+			}
+		}
+	}
+	if req.Runtime.CPU == "" || req.Runtime.Memory == "" || !quantityPattern.MatchString(req.Runtime.CPU) || !quantityPattern.MatchString(req.Runtime.Memory) {
+		problems = append(problems, "runtime CPU and memory must contain safe finite values")
+	}
+	for _, ref := range req.Runtime.Environment {
+		if !envNamePattern.MatchString(ref.Name) || !namePattern.MatchString(ref.Secret) || !secretKeyPattern.MatchString(ref.SecretKey) {
+			problems = append(problems, "environment reference contains an unsafe name")
+		}
+	}
+	if u, err := url.ParseRequestURI(req.Source.Repository); err != nil || u.Scheme == "" || u.Host == "" {
+		problems = append(problems, "source repository must be an absolute URL")
+	}
+	if !commitPattern.MatchString(req.Source.Commit) || req.Source.CIReference == "" {
+		problems = append(problems, "source commit and CI reference are required")
+	}
+	if len(problems) != 0 {
+		return errors.New(strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func ValidateWorkerContractRegistration(req WorkerContractRegistration, expectedBuildID string) error {
+	var problems []string
+	if req.BuildID != expectedBuildID || !versionPattern.MatchString(req.BuildID) {
+		problems = append(problems, "Worker Build ID must match the pending WorkerVersion")
+	}
+	if req.Metadata.ContractVersion != OrgSDKContractVersion || req.Metadata.ProjectionEventVersion != OrgSDKProjectionEventVersion || req.Metadata.DynamicNodeIDVersion != OrgSDKDynamicNodeIDVersion {
+		problems = append(problems, "Org SDK manifest versions are unsupported")
+	}
+	if req.Metadata.SDK.ModuleVersion != OrgSDKModuleVersion || req.Metadata.SDK.RuntimeProtocolVersion != OrgSDKRuntimeProtocolVersion {
+		problems = append(problems, "unsupported SDK module or runtime protocol version")
+	}
+	if !manifestDigestPattern.MatchString(req.ManifestDigest) {
+		problems = append(problems, "canonical manifest digest is required")
+	} else if digest, err := workerMetadataDigest(req.Metadata); err != nil || digest != req.ManifestDigest {
+		problems = append(problems, "manifest digest does not match canonical contract")
+	}
+	if len(req.Metadata.Workflows) == 0 {
+		problems = append(problems, "contract must declare at least one workflow")
+	}
+	for _, workflow := range req.Metadata.Workflows {
+		if strings.ToLower(workflow.VersioningBehavior) != "pinned" {
+			problems = append(problems, fmt.Sprintf("workflow %q must declare pinned versioning behavior", workflow.Name))
+		}
+		if err := validateDynamicWorkflow(workflow); err != nil {
+			problems = append(problems, fmt.Sprintf("workflow %q dynamic contract: %v", workflow.Name, err))
+		}
+	}
+	if err := validateDynamicActivities(req.Metadata); err != nil {
+		problems = append(problems, err.Error())
 	}
 	if len(problems) != 0 {
 		return errors.New(strings.Join(problems, "; "))

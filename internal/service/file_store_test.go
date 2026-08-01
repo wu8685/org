@@ -33,6 +33,10 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	if err := store.SaveActionOperation(tenant.ID, operation); err != nil {
 		t.Fatal(err)
 	}
+	credential := domain.BootstrapCredential{TokenHash: "sha256-hash-only", Binding: domain.BootstrapBinding{TenantID: tenant.ID, WorkerVersionID: d.ID}}
+	if err := store.SaveBootstrapCredential(credential); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.UpdateWorkerVersionDescription(tenant.ID, worker.Name, "v1", 1, "Corrected release."); err != nil {
 		t.Fatal(err)
 	}
@@ -55,5 +59,8 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	}
 	if got, ok := reopened.ActionOperation(tenant.ID, i.ID, operation.RuntimeNodeID, operation.Action, operation.OperationID); !ok || got.State != domain.ActionDeliveryDelivered {
 		t.Fatalf("action operation = %#v, %v", got, ok)
+	}
+	if got, ok := reopened.BootstrapCredential(credential.TokenHash); !ok || got.Binding.WorkerVersionID != d.ID {
+		t.Fatalf("bootstrap credential = %#v, %v", got, ok)
 	}
 }

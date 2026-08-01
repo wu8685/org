@@ -90,6 +90,41 @@ func TestValidateWorkerVersionRejectsMutableImageAndUnsafeWrites(t *testing.T) {
 	}
 }
 
+func TestValidateWorkerVersionPublishAcceptsOnlyCanonicalPlatformDigestAndNoContract(t *testing.T) {
+	req := WorkerVersionPublishRequest{
+		WorkerName: "payments-worker", Description: "Charges payment orders.",
+		Image: "registry.example.com/acme/payments@sha256:" + strings.Repeat("a", 64), Version: "2026.08.1",
+		Runtime: RuntimeSpec{CPU: "100m", Memory: "128Mi"},
+		Source:  SourceProvenance{Repository: "https://github.com/acme/payments", Branch: "main", Commit: "abcdef1234567", CIReference: "build-42"},
+	}
+	if err := ValidateWorkerVersionPublish(req, []string{"registry.example.com"}); err != nil {
+		t.Fatalf("valid pending release: %v", err)
+	}
+	for _, image := range []string{
+		"registry.example.com/acme/payments:latest",
+		"registry.example.com/acme/payments:v1@sha256:" + strings.Repeat("a", 64),
+		"registry.example.com/acme/payments@sha256:" + strings.Repeat("A", 64),
+		"registry.example.com@sha256:" + strings.Repeat("a", 64),
+	} {
+		req.Image = image
+		if err := ValidateWorkerVersionPublish(req, []string{"registry.example.com"}); err == nil || !strings.Contains(err.Error(), "immutable") {
+			t.Fatalf("image %q accepted: %v", image, err)
+		}
+	}
+}
+
+func TestValidateRegisteredContractIsSeparateFromPublishInput(t *testing.T) {
+	req := dynamicWorkerVersionRequest(t)
+	registration := WorkerContractRegistration{ManifestDigest: req.ManifestDigest, Metadata: req.Metadata, BuildID: req.Version}
+	if err := ValidateWorkerContractRegistration(registration, req.Version); err != nil {
+		t.Fatalf("valid registration: %v", err)
+	}
+	registration.BuildID = "other"
+	if err := ValidateWorkerContractRegistration(registration, req.Version); err == nil || !strings.Contains(err.Error(), "Build ID") {
+		t.Fatalf("mismatched build ID accepted: %v", err)
+	}
+}
+
 func TestValidateWorkerVersionAcceptsExplicitReconciliation(t *testing.T) {
 	req := validWorkerVersionRequest()
 	req.Metadata.Activities[0].IdempotencyKey = nil

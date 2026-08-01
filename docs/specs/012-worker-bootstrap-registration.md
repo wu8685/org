@@ -107,6 +107,10 @@ any pre-ready state
 - multi-arch支持留待独立后续规格：届时必须从allowlisted registry解析index、验证observed child属于index，并定义registry auth/cache/TOCTOU；不得仅因字符串digest相同就宣称已验证；
 - control plane在部署前可以检查registry media type；registration时仍必须将Pod observed `imageID`规范化后与expected platform digest exact compare；任一步不支持、无法解析或不一致都不能promotion。
 
+#### kind/containerd 本地导入说明
+
+`kind load docker-image` 会让 containerd CRI 创建 `docker.io/library/import-<date>@sha256:...` 导入 wrapper；Pod `imageID` 因而不一定逐字返回 Pod spec 中的 `org.local/...@sha256:...`。这不是生产 registry 验证的宽松例外。仅当 Kubernetes context 是显式配置的 kind development context 时，验证器必须同时满足：Pod spec `containers[worker].image` 与 expected reference 完全一致；Pod UID、ServiceAccount 与 TokenReview 绑定一致；在该 Pod 所在 kind node 上执行 `crictl inspecti <expected reference>`，其 `repoDigests` 同时包含 expected reference 与 Pod runtime `imageID`。三者组成可验证的 exact import linkage。非 kind context 仍要求 normalized runtime `imageID` 与 expected reference 完全一致；不得仅比较 tag、repository 或任意一个 SHA 字符串。
+
 ### 请求
 
 ```http

@@ -12,13 +12,14 @@ import (
 )
 
 type fileState struct {
-	Tenants          map[string]domain.Tenant          `json:"tenants"`
-	Workers          map[string]domain.Worker          `json:"workers"`
-	WorkerVersions   map[string]domain.WorkerVersion   `json:"workerVersions"`
-	Invocations      map[string]domain.Invocation      `json:"invocations"`
-	Audits           map[string][]domain.AuditRecord   `json:"audits"`
-	QuotaLeases      map[string]domain.QuotaLease      `json:"quotaLeases"`
-	ActionOperations map[string]domain.ActionOperation `json:"actionOperations"`
+	Tenants              map[string]domain.Tenant              `json:"tenants"`
+	Workers              map[string]domain.Worker              `json:"workers"`
+	WorkerVersions       map[string]domain.WorkerVersion       `json:"workerVersions"`
+	Invocations          map[string]domain.Invocation          `json:"invocations"`
+	Audits               map[string][]domain.AuditRecord       `json:"audits"`
+	QuotaLeases          map[string]domain.QuotaLease          `json:"quotaLeases"`
+	ActionOperations     map[string]domain.ActionOperation     `json:"actionOperations"`
+	BootstrapCredentials map[string]domain.BootstrapCredential `json:"bootstrapCredentials"`
 }
 type FileStore struct {
 	mu    sync.RWMutex
@@ -30,7 +31,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	if path == "" {
 		return nil, errors.New("state file path is required")
 	}
-	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}}}
+	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}}}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -62,7 +63,35 @@ func NewFileStore(path string) (*FileStore, error) {
 	if s.state.ActionOperations == nil {
 		s.state.ActionOperations = map[string]domain.ActionOperation{}
 	}
+	if s.state.BootstrapCredentials == nil {
+		s.state.BootstrapCredentials = map[string]domain.BootstrapCredential{}
+	}
 	return s, nil
+}
+
+func (s *FileStore) SaveBootstrapCredential(credential domain.BootstrapCredential) error {
+	if credential.TokenHash == "" || credential.Binding.TenantID == "" {
+		return errors.New("bootstrap credential binding is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.BootstrapCredentials[credential.TokenHash] = credential
+	return s.persist()
+}
+func (s *FileStore) BootstrapCredential(tokenHash string) (domain.BootstrapCredential, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	credential, ok := s.state.BootstrapCredentials[tokenHash]
+	return credential, ok
+}
+func (s *FileStore) BootstrapCredentials() []domain.BootstrapCredential {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.BootstrapCredential, 0, len(s.state.BootstrapCredentials))
+	for _, credential := range s.state.BootstrapCredentials {
+		out = append(out, credential)
+	}
+	return out
 }
 
 func (s *FileStore) SaveTenant(tenant domain.Tenant) error {

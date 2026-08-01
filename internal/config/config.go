@@ -7,26 +7,27 @@ import (
 )
 
 type Config struct {
-	StateFile             string
-	TemporalAddress       string
-	WorkerTemporalAddress string
-	TemporalNamespace     string
-	TemporalWebBaseURL    string
-	KubeContext           string
-	Kubeconfig            string
-	KubeNamespace         string
-	RegistryAllowlist     []string
-	ConsoleAddress        string
-	ConsoleTenantID       string
-	ConsoleTenantSlug     string
-	ConsoleTenantName     string
-	ConsolePrincipalID    string
+	StateFile               string
+	TemporalAddress         string
+	WorkerTemporalAddress   string
+	WorkerBootstrapEndpoint string
+	TemporalNamespace       string
+	TemporalWebBaseURL      string
+	KubeContext             string
+	Kubeconfig              string
+	KubeNamespace           string
+	RegistryAllowlist       []string
+	ConsoleAddress          string
+	ConsoleTenantID         string
+	ConsoleTenantSlug       string
+	ConsoleTenantName       string
+	ConsolePrincipalID      string
 }
 
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		StateFile: ".org/state.json", TemporalAddress: "127.0.0.1:7233", WorkerTemporalAddress: "host.docker.internal:7233",
-		TemporalNamespace: "default", TemporalWebBaseURL: "http://127.0.0.1:8080", KubeContext: "kind-org",
+		TemporalNamespace: "default", TemporalWebBaseURL: "http://127.0.0.1:8080", WorkerBootstrapEndpoint: "http://host.docker.internal:8090/internal/v1/bootstrap/register", KubeContext: "kind-org",
 		KubeNamespace: "org-workers", RegistryAllowlist: []string{"ghcr.io"},
 		ConsoleAddress: "127.0.0.1:8090", ConsoleTenantID: "tenant-local", ConsoleTenantSlug: "local",
 		ConsoleTenantName: "Local Development", ConsolePrincipalID: "local-developer",
@@ -34,6 +35,7 @@ func Load(getenv func(string) string) (Config, error) {
 	set(&cfg.StateFile, getenv("ORG_STATE_FILE"))
 	set(&cfg.TemporalAddress, getenv("ORG_TEMPORAL_ADDRESS"))
 	set(&cfg.WorkerTemporalAddress, getenv("ORG_WORKER_TEMPORAL_ADDRESS"))
+	set(&cfg.WorkerBootstrapEndpoint, getenv("ORG_WORKER_BOOTSTRAP_ENDPOINT"))
 	set(&cfg.TemporalNamespace, getenv("ORG_TEMPORAL_NAMESPACE"))
 	set(&cfg.TemporalWebBaseURL, getenv("ORG_TEMPORAL_WEB_URL"))
 	set(&cfg.KubeContext, getenv("ORG_KUBE_CONTEXT"))
@@ -49,6 +51,9 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if strings.HasPrefix(cfg.KubeContext, "kind-") && isLoopbackAddress(cfg.WorkerTemporalAddress) {
 		return Config{}, errors.New("Worker Temporal address cannot be localhost for a kind cluster")
+	}
+	if !strings.HasPrefix(cfg.KubeContext, "kind-") && !strings.HasPrefix(strings.ToLower(cfg.WorkerBootstrapEndpoint), "https://") {
+		return Config{}, errors.New("production Worker bootstrap endpoint must use HTTPS")
 	}
 	if len(cfg.RegistryAllowlist) == 0 {
 		return Config{}, errors.New("at least one image registry must be allowlisted")

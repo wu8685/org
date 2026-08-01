@@ -4,9 +4,27 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/internal/domain"
+	"github.com/wu8685/org/internal/service"
 )
+
+func TestBootstrapManifestInjectsCredentialAsReadonlyFileAndNoPublicIdentity(t *testing.T) {
+	d := testDeployment()
+	manifest, err := RenderBootstrapManifest(d, Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, service.BootstrapDeployment{Endpoint: "https://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "opaque-secret", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"kind: Secret", "opaque-secret", "ORG_BOOTSTRAP_ENDPOINT", "/var/run/org-bootstrap/credential", "readOnly: true", "audience: org-worker-bootstrap", "ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE", "ORG_BOOTSTRAP_POD_UID", "fieldPath: metadata.uid", "fsGroup: 65532", "defaultMode: 0440"} {
+		if !strings.Contains(manifest, want) {
+			t.Fatalf("bootstrap manifest missing %q\n%s", want, manifest)
+		}
+	}
+	if strings.Contains(manifest, "ORG_TENANT") || strings.Contains(manifest, "ORG_WORKER_NAME") || strings.Contains(manifest, "ORG_WORKER_VERSION") {
+		t.Fatalf("bootstrap target identity was injected into Worker configuration\n%s", manifest)
+	}
+}
 
 func TestManifestIsDigestPinnedConstrainedAndUsesPodReachableTemporalAddress(t *testing.T) {
 	d := testDeployment()

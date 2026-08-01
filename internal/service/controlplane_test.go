@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 func TestDeployWaitsForKubernetesAndTemporalBeforeCurrent(t *testing.T) {
 	cluster := &fakeCluster{}
 	executor := &fakeExecutor{}
-	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, cluster, executor)
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap"}, cluster, executor)
 
 	deployment, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1"))
 	if err != nil {
@@ -27,6 +28,87 @@ func TestDeployWaitsForKubernetesAndTemporalBeforeCurrent(t *testing.T) {
 	got := append(cluster.calls, executor.calls...)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("calls = %v, want %v", got, want)
+	}
+}
+
+func TestPublishWithoutContractStopsAwaitingBootstrapRegistrationBeforeTemporal(t *testing.T) {
+	cluster := &fakeCluster{}
+	executor := &fakeExecutor{}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap"}, cluster, executor)
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.State != domain.WorkerVersionPending || version.Current || version.RegistrationStatus != domain.BootstrapRegistrationAwaiting {
+		t.Fatalf("pending version = %#v", version)
+	}
+	if got := strings.Join(append(cluster.calls, executor.calls...), ","); got != "apply,wait-kubernetes" {
+		t.Fatalf("calls before registration = %s", got)
+	}
+}
+
+func TestAcceptedBootstrapRegistrationRunsPinnedProbeBeforePromotion(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	cluster := &fakeCluster{}
+	executor := &fakeExecutor{}
+	cp, auth := newTestControlPlane(t, Config{
+		RegistryAllowlist: []string{"registry.example.com"}, BootstrapTTL: 15 * time.Minute, Now: func() time.Time { return now },
+		BootstrapEndpoint: "https://org.local/internal/bootstrap",
+		BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(_ context.Context, binding domain.BootstrapBinding, evidence BootstrapWorkloadEvidence) error {
+			if binding.ExpectedImage != evidence.ObservedImage {
+				return errors.New("image mismatch")
+			}
+			return nil
+		}),
+	}, cluster, executor)
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := cluster.bootstrap
+	if material.Credential == "" {
+		t.Fatal("bootstrap credential was not injected")
+	}
+	contract := bootstrapContract(t, version.Version)
+	executor.probeResult = RuntimeIdentity{ManifestDigest: contract.ManifestDigest, SDKModuleVersion: orgsdk.SDKModuleVersion, RuntimeProtocolVersion: orgsdk.RuntimeProtocolVersion, WorkerBuildID: version.Version}
+	receipt, ready, err := cp.RegisterBootstrap(context.Background(), material.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.ID == "" || ready.State != domain.WorkerVersionPending || ready.Current || len(executor.calls) != 0 {
+		t.Fatalf("registration must return before polling: receipt=%#v version=%#v calls=%v", receipt, ready, executor.calls)
+	}
+	ready, err = cp.PromoteBootstrap(context.Background(), receipt)
+	if err != nil || ready.State != domain.WorkerVersionReady || !ready.Current {
+		t.Fatalf("promotion version=%#v error=%v", ready, err)
+	}
+	if got := strings.Join(executor.calls, ","); got != "wait-temporal,probe,set-current" {
+		t.Fatalf("promotion calls = %s", got)
+	}
+}
+
+func TestRegistrationDuringKubernetesReadinessDoesNotLoseAcceptedContract(t *testing.T) {
+	cluster := &fakeCluster{}
+	var cp *ControlPlane
+	var contract domain.WorkerContractRegistration
+	cluster.waitReady = func(version domain.WorkerVersion) error {
+		contract = bootstrapContract(t, version.Version)
+		_, _, err := cp.RegisterBootstrap(context.Background(), cluster.bootstrap.Credential, BootstrapWorkloadEvidence{ObservedImage: version.Image}, contract)
+		return err
+	}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap", BootstrapVerifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return nil })}, cluster, &fakeExecutor{})
+	request := workerVersionRequest("v1")
+	request.ManifestDigest, request.Metadata = "", domain.WorkerMetadata{}
+	version, err := cp.PublishVersion(context.Background(), auth, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.RegistrationStatus != domain.BootstrapRegistrationAccepted || version.ManifestDigest != contract.ManifestDigest || len(version.Metadata.Workflows) == 0 || !version.Health.KubernetesReady {
+		t.Fatalf("accepted registration was overwritten: %#v", version)
 	}
 }
 
@@ -253,14 +335,27 @@ func TestSignalAndQueryMustBeDeclared(t *testing.T) {
 	}
 }
 
-type fakeCluster struct{ calls []string }
+type fakeCluster struct {
+	calls     []string
+	bootstrap BootstrapDeployment
+	waitReady func(domain.WorkerVersion) error
+}
 
 func (f *fakeCluster) Apply(context.Context, domain.WorkerVersion) error {
 	f.calls = append(f.calls, "apply")
 	return nil
 }
-func (f *fakeCluster) WaitReady(context.Context, domain.WorkerVersion) error {
+
+func (f *fakeCluster) ApplyBootstrap(_ context.Context, _ domain.WorkerVersion, deployment BootstrapDeployment) error {
+	f.calls = append(f.calls, "apply")
+	f.bootstrap = deployment
+	return nil
+}
+func (f *fakeCluster) WaitReady(_ context.Context, version domain.WorkerVersion) error {
 	f.calls = append(f.calls, "wait-kubernetes")
+	if f.waitReady != nil {
+		return f.waitReady(version)
+	}
 	return nil
 }
 

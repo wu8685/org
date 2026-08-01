@@ -21,9 +21,14 @@ import (
 )
 
 type Config struct {
-	RegistryAllowlist  []string
-	TemporalWebBaseURL string
-	TemporalNamespace  string
+	RegistryAllowlist     []string
+	TemporalWebBaseURL    string
+	TemporalNamespace     string
+	BootstrapTTL          time.Duration
+	BootstrapReceiptGrace time.Duration
+	BootstrapVerifier     BootstrapWorkloadVerifier
+	Now                   func() time.Time
+	BootstrapEndpoint     string
 }
 
 var (
@@ -61,6 +66,14 @@ type AuthenticatedContext struct {
 type Cluster interface {
 	Apply(context.Context, domain.WorkerVersion) error
 	WaitReady(context.Context, domain.WorkerVersion) error
+}
+type BootstrapDeployment struct {
+	Endpoint   string
+	Credential string
+	ExpiresAt  time.Time
+}
+type BootstrapCluster interface {
+	ApplyBootstrap(context.Context, domain.WorkerVersion, BootstrapDeployment) error
 }
 type Executor interface {
 	WaitForPoller(context.Context, domain.WorkerVersion) error
@@ -130,18 +143,121 @@ type Store interface {
 	ReleaseQuotaLease(string, string) error
 	QuotaLeases(string) []domain.QuotaLease
 	ReconcileQuotaLeases(string, map[string]bool) (int, error)
+	SaveBootstrapCredential(domain.BootstrapCredential) error
+	BootstrapCredential(string) (domain.BootstrapCredential, bool)
+	BootstrapCredentials() []domain.BootstrapCredential
 }
 
 type ControlPlane struct {
-	cfg      Config
-	store    Store
-	cluster  Cluster
-	executor Executor
-	mu       sync.Mutex
+	cfg       Config
+	store     Store
+	cluster   Cluster
+	executor  Executor
+	bootstrap *BootstrapRegistry
+	mu        sync.Mutex
 }
 
 func New(cfg Config, store Store, cluster Cluster, executor Executor) *ControlPlane {
-	return &ControlPlane{cfg: cfg, store: store, cluster: cluster, executor: executor}
+	cp := &ControlPlane{cfg: cfg, store: store, cluster: cluster, executor: executor}
+	cp.bootstrap = NewBootstrapRegistry(store, BootstrapRegistryConfig{TTL: cfg.BootstrapTTL, ReceiptGrace: cfg.BootstrapReceiptGrace, Now: cfg.Now, Verifier: cfg.BootstrapVerifier})
+	return cp
+}
+
+func (c *ControlPlane) IssueBootstrap(version domain.WorkerVersion, deploymentGeneration string) (BootstrapMaterial, error) {
+	return c.bootstrap.Issue(version, deploymentGeneration)
+}
+
+func (c *ControlPlane) RegisterBootstrap(ctx context.Context, token string, evidence BootstrapWorkloadEvidence, registration domain.WorkerContractRegistration) (BootstrapRegistrationReceipt, domain.WorkerVersion, error) {
+	receipt, err := c.bootstrap.Register(ctx, token, evidence, registration)
+	if err != nil {
+		return BootstrapRegistrationReceipt{}, domain.WorkerVersion{}, err
+	}
+	version, err := c.bootstrapVersion(receipt)
+	return receipt, version, err
+}
+
+func (c *ControlPlane) bootstrapVersion(receipt BootstrapRegistrationReceipt) (domain.WorkerVersion, error) {
+	for _, credential := range c.store.BootstrapCredentials() {
+		if credential.ReceiptID != receipt.ID || credential.Binding.WorkerVersionID != receipt.WorkerVersionID {
+			continue
+		}
+		version, ok := c.store.WorkerVersion(credential.Binding.TenantID, credential.Binding.WorkerName, credential.Binding.Version)
+		if ok {
+			return version, nil
+		}
+	}
+	return domain.WorkerVersion{}, ErrNotFound
+}
+
+func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRegistrationReceipt) (domain.WorkerVersion, error) {
+	version, err := c.bootstrapVersion(receipt)
+	if err != nil {
+		return domain.WorkerVersion{}, err
+	}
+	if version.State == domain.WorkerVersionReady {
+		return version, nil
+	}
+	for !version.Health.KubernetesReady {
+		if version.State == domain.WorkerVersionFailed {
+			return version, errors.New("candidate workload failed before promotion")
+		}
+		select {
+		case <-ctx.Done():
+			return version, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		refreshed, refreshErr := c.bootstrapVersion(receipt)
+		if refreshErr != nil {
+			return domain.WorkerVersion{}, refreshErr
+		}
+		version = refreshed
+	}
+	if err := c.executor.WaitForPoller(ctx, version); err != nil {
+		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
+		return failed, cause
+	}
+	version.Health.WorkerPolling = true
+	identity, err := c.executor.Probe(ctx, version)
+	if err != nil {
+		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
+		return failed, cause
+	}
+	if err := validateRuntimeIdentity(version, identity); err != nil {
+		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
+		return failed, cause
+	}
+	if err := c.executor.SetCurrent(ctx, version); err != nil {
+		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
+		return failed, cause
+	}
+	c.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			c.mu.Unlock()
+		}
+	}()
+	worker, ok := c.store.Worker(version.TenantID, version.WorkerName)
+	if !ok {
+		return domain.WorkerVersion{}, ErrNotFound
+	}
+	for _, old := range c.store.WorkerVersions(version.TenantID, version.WorkerName) {
+		if old.ID != version.ID && old.Current {
+			old.Current = false
+			if err := c.store.SaveWorkerVersion(version.TenantID, old); err != nil {
+				return domain.WorkerVersion{}, err
+			}
+		}
+	}
+	version.Current, version.State, version.UpdatedAt = true, domain.WorkerVersionReady, time.Now().UTC()
+	if err := c.store.SaveWorkerVersion(version.TenantID, version); err != nil {
+		return domain.WorkerVersion{}, err
+	}
+	worker.CurrentVersion, worker.UpdatedAt = version.Version, time.Now().UTC()
+	if err := c.store.SaveWorker(version.TenantID, worker); err != nil {
+		return domain.WorkerVersion{}, err
+	}
+	return version, nil
 }
 
 func (c *ControlPlane) CreateWorker(_ context.Context, auth AuthenticatedContext, req CreateWorkerRequest) (result domain.Worker, err error) {
@@ -203,7 +319,12 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 		return domain.WorkerVersion{}, err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			c.mu.Unlock()
+		}
+	}()
 	worker, ok := c.store.Worker(tenant.ID, req.WorkerName)
 	if !ok {
 		return domain.WorkerVersion{}, ErrNotFound
@@ -248,11 +369,46 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 	if err := c.store.SaveWorkerVersion(tenant.ID, d); err != nil {
 		return domain.WorkerVersion{}, err
 	}
-	if err := c.cluster.Apply(ctx, d); err != nil {
-		return c.failWorkerVersion(tenant.ID, d, err)
+	var applyErr error
+	bootstrapPublish := d.ManifestDigest == "" && len(d.Metadata.Workflows) == 0
+	if bootstrapPublish {
+		bootstrapCluster, ok := c.cluster.(BootstrapCluster)
+		if !ok || strings.TrimSpace(c.cfg.BootstrapEndpoint) == "" {
+			return c.failWorkerVersion(tenant.ID, d, errors.New("bootstrap-capable cluster and endpoint are required"))
+		}
+		material, issueErr := c.bootstrap.Issue(d, "generation-1")
+		if issueErr != nil {
+			return c.failWorkerVersion(tenant.ID, d, issueErr)
+		}
+		c.mu.Unlock()
+		locked = false
+		applyErr = bootstrapCluster.ApplyBootstrap(ctx, d, BootstrapDeployment{Endpoint: c.cfg.BootstrapEndpoint, Credential: material.Token, ExpiresAt: material.ExpiresAt})
+	} else {
+		c.mu.Unlock()
+		locked = false
+		applyErr = c.cluster.Apply(ctx, d)
+	}
+	if applyErr != nil {
+		return c.failWorkerVersion(tenant.ID, d, applyErr)
 	}
 	if err := c.cluster.WaitReady(ctx, d); err != nil {
 		return c.failWorkerVersion(tenant.ID, d, err)
+	}
+	if bootstrapPublish {
+		latest, ok := c.store.WorkerVersion(tenant.ID, d.WorkerName, d.Version)
+		if !ok || latest.ID != d.ID {
+			return domain.WorkerVersion{}, ErrNotFound
+		}
+		latest.Health.KubernetesReady = true
+		if latest.RegistrationStatus == "" {
+			latest.RegistrationStatus = domain.BootstrapRegistrationAwaiting
+		}
+		latest.UpdatedAt = time.Now().UTC()
+		if err := c.store.SaveWorkerVersion(tenant.ID, latest); err != nil {
+			return domain.WorkerVersion{}, err
+		}
+		result = latest
+		return latest, nil
 	}
 	d.Health.KubernetesReady = true
 	if err := c.executor.WaitForPoller(ctx, d); err != nil {
@@ -834,18 +990,44 @@ func newID(prefix string) string {
 }
 
 type MemoryStore struct {
-	mu               sync.RWMutex
-	tenants          map[string]domain.Tenant
-	workers          map[string]domain.Worker
-	versions         map[string]domain.WorkerVersion
-	invocations      map[string]domain.Invocation
-	audits           map[string][]domain.AuditRecord
-	quotaLeases      map[string]domain.QuotaLease
-	actionOperations map[string]domain.ActionOperation
+	mu                   sync.RWMutex
+	tenants              map[string]domain.Tenant
+	workers              map[string]domain.Worker
+	versions             map[string]domain.WorkerVersion
+	invocations          map[string]domain.Invocation
+	audits               map[string][]domain.AuditRecord
+	quotaLeases          map[string]domain.QuotaLease
+	actionOperations     map[string]domain.ActionOperation
+	bootstrapCredentials map[string]domain.BootstrapCredential
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{tenants: map[string]domain.Tenant{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}}
+	return &MemoryStore{tenants: map[string]domain.Tenant{}, workers: map[string]domain.Worker{}, versions: map[string]domain.WorkerVersion{}, invocations: map[string]domain.Invocation{}, audits: map[string][]domain.AuditRecord{}, quotaLeases: map[string]domain.QuotaLease{}, actionOperations: map[string]domain.ActionOperation{}, bootstrapCredentials: map[string]domain.BootstrapCredential{}}
+}
+
+func (s *MemoryStore) SaveBootstrapCredential(credential domain.BootstrapCredential) error {
+	if credential.TokenHash == "" || credential.Binding.TenantID == "" {
+		return errors.New("bootstrap credential binding is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootstrapCredentials[credential.TokenHash] = credential
+	return nil
+}
+func (s *MemoryStore) BootstrapCredential(tokenHash string) (domain.BootstrapCredential, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	credential, ok := s.bootstrapCredentials[tokenHash]
+	return credential, ok
+}
+func (s *MemoryStore) BootstrapCredentials() []domain.BootstrapCredential {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.BootstrapCredential, 0, len(s.bootstrapCredentials))
+	for _, credential := range s.bootstrapCredentials {
+		out = append(out, credential)
+	}
+	return out
 }
 func (s *MemoryStore) SaveTenant(tenant domain.Tenant) error {
 	if err := domain.ValidateTenant(tenant); err != nil {

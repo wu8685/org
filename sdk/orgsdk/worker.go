@@ -95,8 +95,9 @@ func registrationName(registration Registration) string {
 	}
 }
 
-func (a ActivityDefinition[I, O]) registrationName() string { return "activity:" + a.Name }
-func (d WorkflowDefinition[I, O]) registrationName() string { return "workflow:" + d.Name }
+func (a ActivityDefinition[I, O]) registrationName() string                { return "activity:" + a.Name }
+func (d WorkflowDefinition[I, O]) registrationName() string                { return "workflow:" + d.Name }
+func (d WorkflowDefinition[I, O]) bootstrapContract() (string, Definition) { return d.Name, d.Contract }
 
 type temporalRegistrationSink struct {
 	worker worker.Worker

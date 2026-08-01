@@ -19,15 +19,18 @@ func TestDefaultsSeparateHostAndKindPodTemporalEndpoints(t *testing.T) {
 	if cfg.ConsoleAddress != "127.0.0.1:8090" || cfg.ConsoleTenantSlug != "local" {
 		t.Fatalf("console defaults = %#v", cfg)
 	}
+	if cfg.WorkerBootstrapEndpoint != "http://host.docker.internal:8090/internal/v1/bootstrap/register" {
+		t.Fatalf("Worker bootstrap endpoint = %q", cfg.WorkerBootstrapEndpoint)
+	}
 }
 
 func TestProductionContextAndEndpointsAreConfigurable(t *testing.T) {
-	env := map[string]string{"ORG_TEMPORAL_ADDRESS": "cloud.example.com:7233", "ORG_WORKER_TEMPORAL_ADDRESS": "temporal.internal:7233", "ORG_KUBE_CONTEXT": "production", "ORG_KUBECONFIG": "/secure/kubeconfig", "ORG_REGISTRY_ALLOWLIST": "registry.example.com,ghcr.io"}
+	env := map[string]string{"ORG_TEMPORAL_ADDRESS": "cloud.example.com:7233", "ORG_WORKER_TEMPORAL_ADDRESS": "temporal.internal:7233", "ORG_WORKER_BOOTSTRAP_ENDPOINT": "https://org.internal/bootstrap", "ORG_KUBE_CONTEXT": "production", "ORG_KUBECONFIG": "/secure/kubeconfig", "ORG_REGISTRY_ALLOWLIST": "registry.example.com,ghcr.io"}
 	cfg, err := Load(func(key string) string { return env[key] })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.KubeContext != "production" || cfg.Kubeconfig != "/secure/kubeconfig" || len(cfg.RegistryAllowlist) != 2 {
+	if cfg.KubeContext != "production" || cfg.Kubeconfig != "/secure/kubeconfig" || cfg.WorkerBootstrapEndpoint != "https://org.internal/bootstrap" || len(cfg.RegistryAllowlist) != 2 {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
@@ -36,6 +39,13 @@ func TestKindRejectsWorkerLocalhostBecauseItPointsAtThePod(t *testing.T) {
 	env := map[string]string{"ORG_WORKER_TEMPORAL_ADDRESS": "127.0.0.1:7233"}
 	if _, err := Load(func(key string) string { return env[key] }); err == nil {
 		t.Fatal("expected kind Worker localhost rejection")
+	}
+}
+
+func TestProductionBootstrapEndpointRequiresTLS(t *testing.T) {
+	env := map[string]string{"ORG_KUBE_CONTEXT": "production", "ORG_WORKER_BOOTSTRAP_ENDPOINT": "http://org.internal/bootstrap"}
+	if _, err := Load(func(key string) string { return env[key] }); err == nil {
+		t.Fatal("production HTTP bootstrap endpoint was accepted")
 	}
 }
 
