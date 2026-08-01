@@ -6,6 +6,22 @@
 
 **Approved — implementation authorized on 2026-08-01.**
 
+### Pending Draft amendment: startup bootstrap registration
+
+**Awaiting explicit user approval; not implemented.** See [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) for the proposed authoritative protocol. Until 012 is approved, the approved behavior below remains unchanged.
+
+If approved, 012 supersedes statements below that make a generated manifest file or publish-request manifest bytes part of the runtime registration contract:
+
+- 用户仍只声明typed Definition并调用Org SDK hosted Worker启动入口；
+- SDK startup在内存中从typed Definition构造canonical manifest/digest，不读取用户管理的manifest file；
+- startup先加载validated configuration，再构造contract，使用injected short-lived bootstrap credential幂等注册，await accepted/rejected；
+- 只有registration accepted后才启动Temporal Worker polling；registration后、polling前crash保持pending，restart exact retry后继续；
+- registration identity绑定pending WorkerVersion、expected image digest、manifest digest、SDK/runtime protocol与Build ID；Worker不能指定Tenant/Worker/version或routing identity；
+- generated JSON只是可选CI/debug artifact，不是publish、startup或promotion所需载体；
+- registration后仍须通过poller readiness与pinned contract verification，三者一致后才能Ready/Current。
+
+该amendment不改变动态DAG、Activity safety、WaitForAction、projection与Pinned compatibility contract，只改变manifest如何从实际runtime进入control plane。
+
 本文件只定义 Org SDK 的 authoring model、动态 semantic graph、projection、Activity/action contract、manifest、安全边界与版本兼容性。它不授权新增 SDK 代码、测试、generator、sample、control-plane adapter、UI 或 HTTP handler，也不授权 commit/push。
 
 `005-interactive-parallel-dag-contract.md` 仍是 Draft。本规格保留 005 的产品目标，但修正两个核心假设：

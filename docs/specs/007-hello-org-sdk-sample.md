@@ -6,6 +6,12 @@
 
 **Approved — implementation authorized only after 006 Org SDK is implemented and verified.**
 
+### Pending Draft amendment: bootstrap consumer
+
+**Awaiting explicit user approval; not implemented.** If [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is approved, Hello Worker startup must call the Org SDK hosted entrypoint: typed Definition → in-memory canonical contract/digest → idempotent bootstrap registration → await accepted → start Temporal Worker polling. Sample用户不读取或提交manifest file。
+
+`generated/org-worker-manifest.json`降为可选golden/CI/debug artifact；它可以继续用于contract diff和测试，但删除该文件不得破坏正常hosted startup。真实E2E需验证registration后、polling前restart可exact retry，最终registration/poller/probe三项一致后Ready；现有Current与历史Pinned验收继续保留。
+
 在 Org SDK 完成 unit、race、vet 与 Temporal runtime verification 之前，本规格只授权文档设计，不授权修改 `samples/hello`。
 
 ## 目标
@@ -58,7 +64,7 @@ samples/hello/
 2. SDK testkit 执行后返回原有 greeting/result。
 3. projection 逐节点为 completed，dependency 正确，ID replay 稳定。
 4. Sample source 不 import `go.temporal.io/sdk/*`，不注册 raw query/Signal。
-5. generated manifest 与 Definition digest 一致。
+5. startup从Definition构造的canonical contract/digest稳定；可选generated JSON（若生成）与其一致。
 6. Docker/build/kind contract 与现有 immutable digest 行为不退化。
 7. 真实 E2E 继续覆盖 Current 与显式历史 Pinned version。
 

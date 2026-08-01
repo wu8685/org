@@ -6,6 +6,21 @@
 
 **Approved — implementation authorized by the user on 2026-08-01.**
 
+### Pending Draft amendment: publish without manifest upload
+
+**Awaiting explicit user approval; not implemented.** See [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md). Until 012 is approved, the approved API/UI contract below remains unchanged.
+
+If approved, 012 supersedes the `contractArtifact` publish input and generated-manifest file picker described below:
+
+- publish form/API只接收version、description、immutable image digest、versionConfig、runtime与source provenance；
+- UI不要求选择、上传或粘贴manifest，也不计算/提交manifest digest；
+- publish返回`202 Accepted`，WorkerVersion detail进入durable pending verification；
+- timeline分别展示candidate deployment、`SDK registration`、Worker polling、`contract verification`与promotion；
+- registration前contract区域显示“等待Worker通过Org SDK注册”；registration accepted后从control-plane read model只读展示contract；
+- SDK registration rejected、expired、image mismatch、protocol mismatch、poller timeout与probe mismatch使用不同安全状态，不泄露bootstrap credential、Pod evidence或platform routing；
+- refresh后从durable release/operation恢复，不依赖浏览器缓存或in-memory publish operation；
+- optional generated JSON仅供CI/debug，Console没有离线manifest file输入。
+
 本文件把用户提供的 `/Users/wu8685/Downloads/org-worker-console.html` 转化为正式产品与接口规格。参考文件 SHA-256 为：
 
 ```text

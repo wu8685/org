@@ -1,0 +1,428 @@
+# Worker bootstrap registration protocol
+
+> Terminology: this specification follows the canonical [org glossary](../architecture/glossary.md). Product identity is Tenant → Worker → WorkerVersion. Infrastructure continues to use one shared platform Temporal Namespace and one shared platform Kubernetes Namespace; a product Tenant is never mapped to either underlying Namespace.
+
+## 状态
+
+**Draft amendment — awaiting explicit user approval. No implementation authorization.**
+
+本 Draft 调整 `006-org-sdk.md` 与 `011-console-ui-http-api.md` 中 WorkerVersion 发布携带 manifest artifact 的既有设计。获得批准前：
+
+- 不修改 SDK、control plane、Console、Samples、deployment manifest、测试或运行环境；
+- 现有已批准规格与实现仍是当前行为；
+- 本文件中的 endpoint、credential、状态与 timeout 都只是待确认 contract。
+
+## 决策摘要
+
+用户发布 WorkerVersion 时只提交 release 与部署输入：
+
+```text
+authenticated Tenant + route workerName
+version + description
+immutable OCI image digest
+versionConfig + runtime resources/Secret references
+source provenance
+```
+
+用户不提交、上传或编辑 SDK manifest。org 创建 pending release，部署候选 Pod，并注入一个短生命周期、单用途、服务端绑定到确切 Tenant + Worker + WorkerVersion + expected image digest 的 bootstrap credential。Org SDK startup 从用户已编译进 Worker 的 typed Definition 在内存中构造 canonical manifest/digest，向内部 registration endpoint 自注册。control plane 验证 credential、Pod/image identity、contract 与 SDK protocol 后保存只读 contract，再通过既有 Worker poller + pinned contract verification 做 promotion gate。
+
+```text
+Console publish
+  -> org creates pending WorkerVersion and publish operation
+  -> org deploys candidate Pod with bound bootstrap material
+  -> Org SDK startup constructs canonical manifest from typed Definition
+  -> internal bootstrap registration
+  -> org verifies binding + Pod/image + contract/protocol/policy
+  -> immutable contract is stored
+  -> poller ready + pinned contract probe matches registration
+  -> WorkerVersion Ready and optionally Current
+```
+
+org 仍不 build 或 push 用户 image。bootstrap registration 证明的是“被部署候选 runtime 使用该 credential 声明并加载了哪个 contract”，不能单独证明 image 不含恶意代码或 raw SDK bypass；`010-workflow-execution-risk-defense.md` 中更强的 supply-chain 与不可信 Worker 防御仍未获批准。
+
+## 目标与非目标
+
+### 目标
+
+1. UI 与 user-facing publish API 不再接收 manifest bytes 或 manifest digest。
+2. contract 来源与实际启动的候选 Worker runtime 绑定，而不是浏览器上传文件。
+3. Worker 不能选择或覆盖 Tenant、Worker、WorkerVersion、image 或 routing identity。
+4. registration 可安全处理 Worker restart、网络重试与重复请求，不允许不同 contract 覆盖。
+5. registration verified、poller ready 与 contract probe verified 是三个独立 promotion 条件。
+6. bootstrap credential 不能调用 Run/action、读取其他资源或注册其他 release。
+7. 失败、timeout、rotation 与拒绝均产生 Tenant-scoped Audit，但不记录 credential。
+
+### 非目标
+
+- 让 Worker 创建 Worker/WorkerVersion；
+- 让 Worker 提供 Tenant ID、Worker name、version 或 platform routing name；
+- 用 bootstrap token 作为正常 control-plane session、Temporal credential 或 Kubernetes API credential；
+- 允许 registration 更新已 Ready release 的 contract；
+- 在 UI 中恢复 manifest file upload；
+- 用 registration 代替 poller、contract probe、OCI provenance 或未来 signature/attestation；
+- 承诺恶意 image 无法伪造其自身 contract。
+
+## WorkerVersion 状态模型
+
+建议把 publish operation 与 durable WorkerVersion verification state 分开。publish operation 可完成/失败；WorkerVersion 保存可恢复的细分状态：
+
+```text
+pending
+  -> deploying
+  -> awaiting-registration
+  -> contract-registered
+  -> poller-ready
+  -> probe-verified
+  -> ready/current
+
+any pre-ready state
+  -> failed-registration-timeout
+  -> failed-image-mismatch
+  -> failed-contract-validation
+  -> failed-protocol-unsupported
+  -> failed-probe-mismatch
+  -> failed-dependency
+```
+
+实现不必把每个内部阶段都暴露为可写 enum，但 read model 必须分别表达：
+
+- Kubernetes candidate health；
+- registration status 与安全 failure category；
+- Worker poller status；
+- contract probe status；
+- promotion/current status。
+
+`ready` 必须满足：候选 workload Ready、registration verified、该 WorkerVersion poller 可见、pinned probe 返回相同 manifest digest / SDK protocol / Build ID。任一条件缺失时不得标为 Ready 或 Current。
+
+## User-facing publish contract
+
+### 请求
+
+```http
+POST /api/v1/workers/{workerName}/versions
+Idempotency-Key: publish-...
+Content-Type: application/json
+
+{
+  "version": "2026.08.1",
+  "description": "本版本做什么；创建时必填。",
+  "image": "registry.example.com/worker@sha256:...",
+  "versionConfig": {
+    "region": "ap-southeast-1",
+    "provider": {"secretRef": "provider-token"}
+  },
+  "runtime": {
+    "cpu": "100m",
+    "memory": "128Mi",
+    "environment": []
+  },
+  "source": {
+    "repository": "https://...",
+    "branch": "main",
+    "commit": "...",
+    "ciReference": "..."
+  }
+}
+```
+
+请求使用 authenticated principal 派生 Tenant；`workerName` 只来自 tenant-scoped route lookup。body 必须拒绝：
+
+- `tenantId`、`tenantSlug`、`scope`、重复 `workerName`；
+- manifest、metadata、projection、contract、manifest digest；
+- Task Queue、Worker Deployment、Workflow ID、Kubernetes workload name；
+- bootstrap endpoint、credential、Pod UID、Build ID 或 SDK protocol override。
+
+### 响应
+
+```http
+HTTP/1.1 202 Accepted
+Location: /api/v1/operations/pub-...
+
+{
+  "operation": {
+    "id": "pub-...",
+    "state": "running",
+    "phase": "awaiting-registration",
+    "statusUrl": "/api/v1/operations/pub-...",
+    "workerVersionUrl": "/api/v1/workers/example/versions/2026.08.1"
+  }
+}
+```
+
+相同 publish idempotency key + canonical payload 返回同一 pending release/operation；同 key 不同 payload 返回 conflict。相同 Tenant + Worker + version 已存在时，不得创建第二个 release 或替换其 contract。
+
+## Pending release 与 server-derived binding
+
+org 接收 publish 后，在任何 Pod 启动前冻结：
+
+```text
+tenantID / tenantSlug
+workerName
+WorkerVersion record ID + public version
+expected immutable OCI digest
+server-derived canonical routing names
+versionConfig/runtime/provenance digests
+publish operation ID
+registration deadline
+```
+
+只有该 pending release 可以获得 bootstrap credential。Worker registration body 不含这些 target identity；endpoint 从 credential reservation 与 authenticated workload evidence中恢复它们。
+
+pending release 在 registration 前不可启动用户 Run、不可成为 Current。配额 lease 从 pending deployment 开始占用；失败或明确撤销时按现有 quota reconciliation 释放。
+
+## Bootstrap credential
+
+### 属性
+
+credential 必须：
+
+- 由密码学安全随机源生成，opaque，服务端只保存不可逆 hash；
+- 短生命周期；推荐初始默认 15 分钟且可配置；
+- audience 固定为 `org-worker-bootstrap`；
+- capability 只有 `register-contract`；
+- 精确绑定 pending release ID、Tenant、Worker、version、expected image digest 与 deployment generation；
+- 不能兑换 user session、Temporal credential或其他 API capability；
+- registration verified、release failed/deleted、token rotated 或过期时立即吊销；
+- 不进入 log、event、error、telemetry、Audit、Pod label/annotation或 user-facing API。
+
+“单用途/单次”采用**一次逻辑写入 + exact retry receipt**语义：第一个成功的 canonical contract 以 compare-and-swap 固化；同 credential、同 digest 的重复请求返回同一 registration receipt，不再次写 contract；不同 digest/identity 永远 conflict 并触发安全 Audit。这样既保持 single-use，又允许 HTTP response 丢失与 Worker restart 后重试。
+
+registration identity/idempotency material由服务端按以下绑定计算，不接受Worker提供target locator：
+
+```text
+registrationKey = H(
+  pendingWorkerVersionRecordID,
+  expectedImageDigest,
+  manifestDigest,
+  sdkModuleVersion,
+  runtimeProtocolVersion,
+  contractVersion,
+  observedBuildID
+)
+```
+
+同一binding与canonical body返回同一结果；manifest/protocol/Build ID变化会得到不同material并被既有reservation拒绝，而不是创建第二次注册。
+
+### Pod 注入
+
+推荐注入方式：
+
+- bootstrap endpoint 作为非敏感配置；
+- opaque credential 通过只读 projected Secret file 注入，不放普通 env；
+- Pod UID 通过 Downward API 提供，但它只是 locator，不是独立可信证据；
+- 显式 projected ServiceAccount token 使用专用 audience、短 expiration 与 Pod binding，提交给 org 做 TokenReview；
+- `automountServiceAccountToken: false` 保持不变；专用 projected token不授予 Worker Kubernetes API RBAC。
+
+建议内部变量/文件 contract：
+
+```text
+ORG_BOOTSTRAP_ENDPOINT
+ORG_BOOTSTRAP_TOKEN_FILE
+ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE
+ORG_BOOTSTRAP_POD_UID
+```
+
+control plane 自己持有完成 TokenReview 与 Pod read 所需的最小 Kubernetes 权限；Worker ServiceAccount 仍无 Kubernetes API 权限。
+
+### rotation 与 restart
+
+- registration 前同一 Pod process restart：只要 credential 未过期，可 exact retry。
+- Pod replacement 或 deployment generation 变化：org 只为同一 pending release签发新 credential，绑定新 Pod/generation，并立即吊销旧 credential。
+- registration 成功但 Worker 未收到 response：同 token + 同 digest 可读取同一 receipt，直到短 retry grace 结束；不能提交新 contract。
+- registration成功后、开始Temporal Worker polling前process crash：release停留在`contract-registered`而非Ready；restart使用同一binding读取receipt，随后开始polling。若始终没有poller，则按poller deadline失败。
+- credential 过期而 release 仍在 registration deadline 内：推荐由 controller 在观察到合法 replacement Pod 后自动轮换一次；反复轮换达到上限后失败，避免无限等待。
+- Ready/failed release restart：不重新打开 registration。runtime 通过 pinned contract probe证明已加载保存的 contract；若确需 contract 变化，必须发布新 WorkerVersion。
+
+## Internal registration endpoint
+
+建议 endpoint：
+
+```http
+PUT /internal/v1/worker-bootstrap/registration
+Authorization: Bootstrap <opaque-token>
+X-Org-Workload-Token: <pod-bound-token>
+Content-Type: application/json
+
+{
+  "canonicalManifest": {},
+  "manifestDigest": "sha256:...",
+  "sdkModuleVersion": "...",
+  "runtimeProtocolVersion": "...",
+  "contractVersion": "...",
+  "projectionEventVersion": "...",
+  "dynamicNodeIdVersion": "...",
+  "capabilities": [],
+  "observedBuildId": "..."
+}
+```
+
+该 endpoint 是 Worker data-plane bootstrap endpoint，不是 browser/user API：
+
+- 不接受 cookie user session、Tenant header、route worker/version 或 raw platform name；
+- strict JSON，拒绝任何 target identity、runtime routing或credential字段；
+- request/body、canonical manifest、schema depth/count/bytes均有固定上限；
+- rate limit key 使用 credential hash + source workload identity，不回显 secret；
+- response只返回 opaque registration receipt、状态与安全错误码。
+
+`observedBuildId` 是 runtime evidence，不是 Worker 选择版本的 locator。control plane从 pending binding计算 expected Build ID，并要求相等；不相等即拒绝。Worker 不能借它注册到另一 version。
+
+## Org SDK startup 行为
+
+Org SDK 保持 code-first。用户只声明typed Definition并调用SDK提供的hosted Worker启动入口；不加载、定位或管理manifest artifact。hosted startup adapter顺序固定：
+
+1. 加载并验证平台注入的非业务配置；
+2. 从当前process中的typed Definition构造contract model；
+3. 按SDK版本锁定的canonicalization生成manifest bytes与digest；
+4. 核对SDK module、runtime protocol、contract/projection/ID versions与runtime Build ID；
+5. 读取injected bootstrap credential与workload evidence；
+6. 以bounded timeout调用registration endpoint；
+7. 对network timeout/5xx使用bounded exponential retry；对4xx identity/contract错误停止重试；
+8. await明确的accepted或rejected结果；
+9. **只有accepted/idempotent accepted后**才创建并启动Temporal Worker polling；
+10. credential、workload token与完整sensitive response不得进入日志或telemetry。
+
+SDK构造出的manifest是typed Definition的deterministic serialization，不是用户文件输入。Definition、SDK version、canonicalization与Build ID相同必须产生相同digest；startup发现同process内重复/冲突Definition、unsupported schema或non-canonical value时必须fail-closed，不能先启动poller再补报contract。
+
+SDK 不把 Tenant、Worker 或 public version写入 manifest，也不让用户 Workflow读取 bootstrap credential。startup adapter是 SDK/runtime integration，不是用户可调用 Workflow primitive。
+
+本地 SDK unit/testkit 可显式使用 `bootstrap disabled` test profile；平台托管 Pod 检测到 injected bootstrap endpoint 后不得绕过 registration。是否允许 production standalone mode 是待确认策略，不能靠缺少 env 静默降级。
+
+## Control-plane verification
+
+registration 必须在同一原子/可恢复 transaction 中完成以下检查：
+
+1. credential 存在、未过期/吊销、capability/audience正确；
+2. bound pending release仍存在且未注册其他 contract；
+3. workload token经 Kubernetes TokenReview 验证指定 audience、ServiceAccount与Pod binding；
+4. Pod UID、owner Deployment generation、tenant/worker/version labels与 pending record匹配；
+5. workload spec image等于 expected immutable digest；
+6. observed `containerStatuses.imageID` 与 expected digest满足已批准的 image identity policy；
+7. manifest digest等于 server canonicalization结果；
+8. contract/schema/template/action/Activity policy/bounds满足006规则；
+9. SDK/runtime/contract/projection/node-ID versions 与 capability set受支持；
+10. observed Build ID等于 server expected Build ID；
+11. compare-and-swap保存 immutable contract、digest、runtime identity、Pod evidence摘要与registration receipt；
+12. credential进入consumed状态并触发后续 poller/probe gate。
+
+Worker self-report不能覆盖 server-derived identity。Pod label、Downward API值与body都不是单独信任根；验证结论来自 credential binding、TokenReview与control-plane直接读取的 Pod/deployment状态组合。
+
+### OCI image identity
+
+OCI index digest与节点实际运行的platform manifest digest可能不同。MVP推荐要求发布输入使用可与Pod `imageID`直接比较的platform-specific immutable digest；这最简单但会限制同一release跨架构部署。若要接受multi-arch index digest，org必须从可信registry解析并验证“observed child digest属于expected index”，同时定义registry认证、缓存与TOCTOU边界。该取舍需要用户确认。
+
+## Contract immutability 与 probe gate
+
+成功 registration 后：
+
+- canonical manifest bytes、digest、SDK/runtime identity只读保存；
+- same receipt exact retry不改变revision；
+- 不允许 UI、user API、Worker restart、new Pod 或 description PATCH修改 contract；
+- description仍可按 WorkerVersion revision/If-Match独立更新；
+- image/runtime/versionConfig/source/Build ID变化必须创建新 WorkerVersion；
+- probe返回的 digest、protocol、capabilities、Build ID必须与registration record逐项相等；
+- mismatch使release失败/隔离，不允许“warning但Ready”；
+- failed release不可被重新注册为另一个 contract；用户修复后发布新version。
+
+## Failure、timeout 与 recovery
+
+| 场景 | 行为 | user-facing state |
+|---|---|---|
+| Worker未注册 | 在deadline内等待/有限轮换 | `awaiting-registration` |
+| registration deadline到期 | revoke token、停止promotion、保留安全摘要 | `failed: registration-timeout` |
+| token过期/未知/已吊销 | 401/403；不泄露binding是否存在 | pending继续或最终timeout |
+| wrong Pod/generation/ServiceAccount | 拒绝、revoke或隔离、security Audit | `failed: workload-identity-mismatch` |
+| expected/observed image不匹配 | 不保存contract、不probe、不Ready | `failed: image-mismatch` |
+| canonical digest不匹配 | 422；不保存部分contract | `failed: contract-digest-mismatch` |
+| policy/bounds/schema不合法 | 422并返回安全category | `failed: contract-invalid` |
+| SDK/protocol unsupported | 422 | `failed: protocol-unsupported` |
+| exact duplicate | 返回原receipt | 状态不倒退 |
+| duplicate不同manifest | 409 + security Audit | 原contract保持不变 |
+| registration成功、poller缺失 | contract可读但不Ready | `contract-registered` / poller timeout |
+| probe mismatch | revoke promotion、保留evidence | `failed: probe-mismatch` |
+
+controller restart后从 durable pending record、credential reservation hash、Pod observation与registration receipt恢复，不依赖内存 goroutine。任何 retry不得创建第二个 WorkerVersion 或重置已消费 credential。
+
+## Credential泄露边界
+
+泄露 token 的攻击者即使成功调用 endpoint，也只能尝试给一个确切 pending release注册一次 contract；仍必须通过 workload attestation、image与Build ID检查。防护层：
+
+- short TTL、single capability、exact binding、hash-at-rest与立即revoke；
+- projected file最小权限、read-only root filesystem、禁止log/env dump；
+- Pod-bound audience token + TokenReview；
+- internal endpoint network exposure最小化、rate limit与可选NetworkPolicy；
+- registration first-writer CAS与different-digest alert；
+- no user/control-plane credential in response。
+
+共享 platform Kubernetes Namespace中的NetworkPolicy只是额外防护，不是硬隔离。若恶意代码已运行在合法候选 image中，它可能读取自己的bootstrap material并注册与自身一致的恶意 contract；本协议不解决该supply-chain信任问题，也不得宣称解决。
+
+## Audit 与 observability
+
+至少记录以下 Tenant-scoped Audit events：
+
+```text
+worker.version.publish.requested
+worker.bootstrap.credential.issued
+worker.bootstrap.credential.rotated
+worker.bootstrap.registration.received
+worker.bootstrap.registration.verified
+worker.bootstrap.registration.rejected
+worker.bootstrap.credential.revoked
+worker.version.poller.ready | timeout
+worker.version.probe.verified | mismatch
+worker.version.promoted | failed
+```
+
+Audit包含 Tenant ID/slug、principal（发布动作）或workload principal摘要（registration）、Worker/version、release/operation/receipt ID、image/manifest digest、Pod UID hash、request ID、outcome/error class与时间。不得包含token、workload token、Secret value、完整manifest、versionConfig/input或credential-bearing headers。
+
+metrics按phase/failure category聚合；高频invalid token、workload mismatch、different-digest duplicate、跨release尝试触发告警。告警不得把秘密写入label。
+
+## Console UX amendment
+
+Publish form移除 manifest file picker、digest input和editable/read-only pre-submit contract preview。用户只填写release与部署输入。提交后：
+
+1. UI收到`202 Accepted`并进入WorkerVersion pending detail；
+2. verification timeline分别显示部署、等待Worker注册、contract validation、poller、probe与promotion；
+3. registration前，contract区域显示“等待候选 Worker 自注册”，不能上传补救；
+4. registration verified后，只读展示server-stored contract与runtime identity；
+5. timeout/mismatch显示安全failure category、request ID与建议动作，不暴露token、Pod credential或底层routing；
+6. browser refresh从durable operation/release read model恢复状态；不依赖内存operation；
+7. UI不允许针对failed/ready release重新上传或覆盖contract；修复动作是发布新WorkerVersion。
+
+## Optional generated JSON artifact
+
+SDK tooling可以选择输出deterministic JSON artifact，但hosted startup、publish API与promotion都不依赖该文件。它只服务于：
+
+- CI golden diff、schema/policy lint与code review；
+- CI中复算typed Definition contract/digest；
+- SBOM/signature/provenance或OCI artifact/referrer的未来输入；
+- 离线合规审计、故障诊断与Sample contract tests；
+- SDK backward compatibility与old-history replay fixtures。
+
+没有generated JSON文件不影响正常发布；用户只调用SDK启动入口。MVP不提供user-facing“离线manifest导入”。若未来需要air-gapped/operator import，必须另写admin-only SDD，定义signature、image binding、权限与它是否仍需runtime registration/probe；不能把Console file upload悄悄恢复为安全边界。
+
+## TDD 实施顺序（获批后）
+
+1. 修改006/011的正式contract与publish request tests，证明user API拒绝manifest/identity字段；
+2. pending release/operation的durable state与publish idempotency；
+3. bootstrap credential reservation、hash/TTL/binding/revoke/rotation tests；
+4. Kubernetes projected material、Pod/generation/image observation与TokenReview adapter tests；
+5. strict internal registration endpoint auth/body/size/rate tests；
+6. manifest canonicalization、policy/protocol/Build ID admission；
+7. first-writer CAS、exact retry、different-payload conflict与controller restart recovery；
+8. Org SDK typed Definition startup construction、registration retry/redaction与accepted-before-polling tests；
+9. poller + pinned probe + promotion state machine；
+10. Console pending/read-only contract UX，移除file picker的contract tests；
+11. Hello → parallel-confirmation → dynamic-decision Sample迁移；
+12. 真实kind E2E：restart/retry、image mismatch、timeout、双Tenant无串扰与成功promotion。
+
+每个行为必须先出现失败测试，再做最小实现。不得在本 Draft 获批前修改现有运行代码或Sample。
+
+## 待用户确认的取舍
+
+1. **Workload attestation（推荐）**：bootstrap opaque token之外，强制使用audience=`org-worker-bootstrap`的Pod-bound projected ServiceAccount token + TokenReview；Worker ServiceAccount仍无Kubernetes API RBAC。是否接受这一额外Kubernetes依赖？
+2. **Image digest policy（推荐MVP）**：首版要求platform-specific digest，可直接与Pod `imageID`比较；还是首版就支持multi-arch index并实现可信registry resolution？
+3. **TTL与timeout（推荐）**：credential TTL 15分钟、Pod scheduled后10分钟registration deadline、单个replacement自动rotation一次；是否需要不同默认值或人工retry入口？
+4. **Standalone SDK模式（推荐）**：testkit/local sample允许显式disable bootstrap；platform hosted mode检测到bootstrap配置后fail-closed。是否允许同一production image在org之外无bootstrap运行？
+5. **失败后的恢复（推荐）**：任何contract/image/protocol mismatch都让该WorkerVersion terminal failed，修复必须发布新version；dependency timeout可由同一pending release controller有限重试。是否允许operator对同一version重新部署？
+6. **Internal endpoint网络与TLS（推荐）**：production必须TLS并使用内部service identity；kind允许cluster-local development CA，而不允许明文bearer token。是否接受本地证书bootstrap复杂度？
+7. **registration receipt grace（推荐）**：成功后保留token hash对应的exact-retry receipt 5分钟，再彻底删除reservation；还是消费后立即失效、由SDK通过另一个非credential status机制恢复？
