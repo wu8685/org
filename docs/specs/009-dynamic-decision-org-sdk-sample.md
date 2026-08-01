@@ -6,9 +6,9 @@
 
 **Approved — implementation authorized only after parallel-confirmation passes on the verified Org SDK.**
 
-### Pending Draft amendment: bootstrap consumer
+### Approved amendment: bootstrap consumer
 
-**Awaiting explicit user approval; not implemented.** If [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is approved, dynamic-decision使用Org SDK hosted startup从typed Definition在内存构造canonical contract/digest，经bound bootstrap credential幂等注册，accepted后才启动Temporal Worker polling。Sample与用户均不选择、上传或读取manifest file。
+**Approved for implementation.** Per [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md), dynamic-decision使用Org SDK hosted startup从typed Definition在内存构造canonical contract/digest，经bound bootstrap credential幂等注册，accepted后才启动Temporal Worker polling。Sample与用户均不选择、上传或读取manifest file。
 
 可选generated JSON保留为CI/debug/golden artifact而非发布输入。真实E2E继续验证两条runtime route与`skipped`projection，并新增registration identity/image/protocol binding、restart exact retry与poller/probe promotion gate。
 

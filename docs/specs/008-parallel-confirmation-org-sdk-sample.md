@@ -6,9 +6,9 @@
 
 **Approved — implementation authorized only after Hello migration passes on the verified Org SDK.**
 
-### Pending Draft amendment: bootstrap consumer
+### Approved amendment: bootstrap consumer
 
-**Awaiting explicit user approval; not implemented.** If [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is approved, parallel-confirmation与Hello使用同一Org SDK hosted startup：从typed Definition构造canonical contract/digest，使用pending WorkerVersion绑定credential注册，accepted后才启动Temporal Worker polling。Sample不管理manifest artifact，也不自行传Tenant/Worker/version。
+**Approved for implementation.** Per [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md), parallel-confirmation与Hello使用同一Org SDK hosted startup：从typed Definition构造canonical contract/digest，使用pending WorkerVersion绑定credential注册，accepted后才启动Temporal Worker polling。Sample不管理manifest artifact，也不自行传Tenant/Worker/version。
 
 可选generated JSON只做CI/debug/golden contract；真实E2E除既有idle action/restart/fork/join外，还须证明bootstrap exact retry不重复注册、registration后poller缺失不会Ready，并在poller + pinned verification成功后promotion。
 

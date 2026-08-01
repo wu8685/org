@@ -6,11 +6,11 @@
 
 **Approved — implementation authorized by the user on 2026-08-01.**
 
-### Pending Draft amendment: publish without manifest upload
+### Approved amendment: publish without manifest upload
 
-**Awaiting explicit user approval; not implemented.** See [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md). Until 012 is approved, the approved API/UI contract below remains unchanged.
+**Approved for implementation.** [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is authoritative where older paragraphs below contain `contractArtifact` or generated-manifest file selection.
 
-If approved, 012 supersedes the `contractArtifact` publish input and generated-manifest file picker described below:
+012 supersedes the `contractArtifact` publish input and generated-manifest file picker described below:
 
 - publish form/API只接收version、description、immutable image digest、versionConfig、runtime与source provenance；
 - UI不要求选择、上传或粘贴manifest，也不计算/提交manifest digest；
@@ -231,10 +231,6 @@ UI可编辑字段：
     "branch": "main",
     "commit": "...",
     "ciReference": "..."
-  },
-  "contractArtifact": {
-    "manifestDigest": "sha256:...",
-    "manifest": {}
   }
 }
 ```
@@ -242,12 +238,12 @@ UI可编辑字段：
 关键边界：
 
 - `versionConfig`与`runtime`是版本配置，可由用户编辑；Secret只用reference。
-- `contractArtifact.manifest`必须来自Org SDK generator/CI artifact。UI只允许选择generated file或已登记artifact，不提供可编辑JSON textarea，不允许增删Workflow/node/action/projection字段。
-- HTTP客户端理论上可伪造任何JSON，所以安全边界不是“readonly widget”；control plane仍执行canonical manifest validation，并在candidate Worker polling后用Pinned contract probe核对manifest digest、SDK/runtime protocol与Build ID。
-- UI在提交前显示artifact digest和解析摘要；提交后只展示server-stored bytes、validation与probe结果。
+- publish body禁止manifest、metadata、contract、projection与manifest digest；HTTP客户端提交这些字段也必须被strict decoder拒绝。
+- Org SDK在候选Worker startup从typed Definition构造canonical contract/digest，经bootstrap registration accepted后才开始polling；UI不参与contract生成或传输。
+- registration accepted后UI只读展示server-stored contract、digest、SDK/runtime identity与后续probe结果。
 - manifest不包含`scope`、Tenant、重复Worker name、version description或version config。
 - `description`属于WorkerVersion且创建必填；PATCH只改变description和revision，不能改变image、runtime、manifest、source或Temporal Build ID。
-- org不build/push image；mutable tag、无digest image或probe mismatch发布失败。
+- org不build/push image；只接受allowlisted registry中的`repository@sha256:<64 lowercase hex>` platform-specific digest。mutable tag、`tag@digest`、multi-arch index digest、observed image mismatch或probe mismatch发布失败。
 
 实现复用现有domain contract；`versionConfig`持久化与artifact ingestion若尚缺行为，必须先补独立测试，再扩展domain。UI不得先以local-only字段假装保存成功。
 
@@ -431,7 +427,7 @@ UI状态语义：
 
 ### Hello
 
-1. 注册generated manifest时UI只读展示三个node templates和两个Activities；不能编辑contract。
+1. SDK registration accepted后UI只读展示三个node templates和两个Activities；UI没有manifest upload/edit入口。
 2. probe verified后version Ready/Current；trigger input按schema验证。
 3. Run detail显示`prepare-greeting → compose-greeting → completed`，结果含实际WorkerVersion。
 4. 显式历史版本触发显示selected历史version/Pinned，不错误标成Current。
@@ -478,7 +474,7 @@ UI状态语义：
 四项产品契约已由用户确认；开始实现前仍建议确认以下实现层取舍：
 
 1. **前端交付形态（推荐）**：MVP使用Go server-rendered HTML +少量progressive enhancement JavaScript，保持单一binary和清晰HTTP契约；dynamic DAG renderer作为独立client component。若选择SPA，需要另定toolchain/build/dependency策略。
-2. **contract artifact录入（推荐）**：UI只选择Org SDK generator产物或已登记CI artifact，read-only preview后随JSON提交；server canonicalize并以runtime probe核验digest。后续可改为OCI referrer自动获取，不改变read-only UI原则。
+2. **contract来源（已批准）**：UI不录入artifact。Org SDK startup从typed Definition构造并bootstrap registration；server保存后只读展示，并以post-poller pinned probe核验。
 3. **publish响应（推荐）**：采用`202 Accepted` + operation polling，避免HTTP请求阻塞Kubernetes readiness与Temporal poller/probe；现有同步application method可先由后台job adapter包装。
 4. **Run更新（推荐）**：MVP使用ETag条件polling；SSE/WebSocket等实时push在实际规模证明需要后另加。
 5. **DAG layout（推荐）**：采用依赖驱动的layered layout +移动端结构化list；具体layout library在实现slice选择并锁版本，不把固定坐标写入contract。

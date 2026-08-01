@@ -4,13 +4,9 @@
 
 ## 状态
 
-**Draft amendment — awaiting explicit user approval. No implementation authorization.**
+**Approved — implementation authorized by the user on 2026-08-01.**
 
-本 Draft 调整 `006-org-sdk.md` 与 `011-console-ui-http-api.md` 中 WorkerVersion 发布携带 manifest artifact 的既有设计。获得批准前：
-
-- 不修改 SDK、control plane、Console、Samples、deployment manifest、测试或运行环境；
-- 现有已批准规格与实现仍是当前行为；
-- 本文件中的 endpoint、credential、状态与 timeout 都只是待确认 contract。
+本规格取代 `006-org-sdk.md` 与 `011-console-ui-http-api.md` 中由发布请求或UI提供manifest artifact的旧设计。实现必须严格遵循SDD → TDD，不得把`010-workflow-execution-risk-defense.md`中尚未批准的扩展防御混入本里程碑。
 
 ## 决策摘要
 
@@ -34,7 +30,7 @@ Console publish
   -> internal bootstrap registration
   -> org verifies binding + Pod/image + contract/protocol/policy
   -> immutable contract is stored
-  -> poller ready + pinned contract probe matches registration
+  -> poller ready + post-poller pinned contract probe matches registration
   -> WorkerVersion Ready and optionally Current
 ```
 
@@ -95,6 +91,21 @@ any pre-ready state
 `ready` 必须满足：候选 workload Ready、registration verified、该 WorkerVersion poller 可见、pinned probe 返回相同 manifest digest / SDK protocol / Build ID。任一条件缺失时不得标为 Ready 或 Current。
 
 ## User-facing publish contract
+
+### OCI image identity
+
+发布输入必须是完整的不可变OCI digest reference：
+
+```text
+<allowlisted-registry>/<repository>@sha256:<64 lowercase hex>
+```
+
+- mutable tag（如`:latest`、`:2026.08.1`）一律拒绝；`tag@digest`也拒绝，避免同一输入同时携带可变与不可变identity；
+- registry host按control-plane allowlist校验；org不把一个registry的digest重写或镜像到另一个registry；
+- digest是发布、credential binding、Pod image observation、Audit与WorkerVersion immutability的唯一image identity；
+- MVP要求**platform-specific image manifest digest**。OCI image index / manifest list digest拒绝发布，因为节点运行时通常暴露其platform child digest，无法与index做离线exact compare；
+- multi-arch支持留待独立后续规格：届时必须从allowlisted registry解析index、验证observed child属于index，并定义registry auth/cache/TOCTOU；不得仅因字符串digest相同就宣称已验证；
+- control plane在部署前可以检查registry media type；registration时仍必须将Pod observed `imageID`规范化后与expected platform digest exact compare；任一步不支持、无法解析或不一致都不能promotion。
 
 ### 请求
 
@@ -306,9 +317,9 @@ registration 必须在同一原子/可恢复 transaction 中完成以下检查�
 
 Worker self-report不能覆盖 server-derived identity。Pod label、Downward API值与body都不是单独信任根；验证结论来自 credential binding、TokenReview与control-plane直接读取的 Pod/deployment状态组合。
 
-### OCI image identity
+### OCI image observation
 
-OCI index digest与节点实际运行的platform manifest digest可能不同。MVP推荐要求发布输入使用可与Pod `imageID`直接比较的platform-specific immutable digest；这最简单但会限制同一release跨架构部署。若要接受multi-arch index digest，org必须从可信registry解析并验证“observed child digest属于expected index”，同时定义registry认证、缓存与TOCTOU边界。该取舍需要用户确认。
+control plane必须区分publish-time registry media-type validation与runtime Pod observation。前者确认输入不是mutable tag或multi-arch index；后者确认实际候选container运行的platform digest就是pending release的expected digest。只完成其中一个不能promotion。
 
 ## Contract immutability 与 probe gate
 
@@ -400,7 +411,7 @@ SDK tooling可以选择输出deterministic JSON artifact，但hosted startup、p
 
 没有generated JSON文件不影响正常发布；用户只调用SDK启动入口。MVP不提供user-facing“离线manifest导入”。若未来需要air-gapped/operator import，必须另写admin-only SDD，定义signature、image binding、权限与它是否仍需runtime registration/probe；不能把Console file upload悄悄恢复为安全边界。
 
-## TDD 实施顺序（获批后）
+## TDD 实施顺序
 
 1. 修改006/011的正式contract与publish request tests，证明user API拒绝manifest/identity字段；
 2. pending release/operation的durable state与publish idempotency；
@@ -415,14 +426,14 @@ SDK tooling可以选择输出deterministic JSON artifact，但hosted startup、p
 11. Hello → parallel-confirmation → dynamic-decision Sample迁移；
 12. 真实kind E2E：restart/retry、image mismatch、timeout、双Tenant无串扰与成功promotion。
 
-每个行为必须先出现失败测试，再做最小实现。不得在本 Draft 获批前修改现有运行代码或Sample。
+每个行为必须先出现失败测试，再做最小实现。
 
-## 待用户确认的取舍
+## 已批准的安全与运行默认
 
-1. **Workload attestation（推荐）**：bootstrap opaque token之外，强制使用audience=`org-worker-bootstrap`的Pod-bound projected ServiceAccount token + TokenReview；Worker ServiceAccount仍无Kubernetes API RBAC。是否接受这一额外Kubernetes依赖？
-2. **Image digest policy（推荐MVP）**：首版要求platform-specific digest，可直接与Pod `imageID`比较；还是首版就支持multi-arch index并实现可信registry resolution？
-3. **TTL与timeout（推荐）**：credential TTL 15分钟、Pod scheduled后10分钟registration deadline、单个replacement自动rotation一次；是否需要不同默认值或人工retry入口？
-4. **Standalone SDK模式（推荐）**：testkit/local sample允许显式disable bootstrap；platform hosted mode检测到bootstrap配置后fail-closed。是否允许同一production image在org之外无bootstrap运行？
-5. **失败后的恢复（推荐）**：任何contract/image/protocol mismatch都让该WorkerVersion terminal failed，修复必须发布新version；dependency timeout可由同一pending release controller有限重试。是否允许operator对同一version重新部署？
-6. **Internal endpoint网络与TLS（推荐）**：production必须TLS并使用内部service identity；kind允许cluster-local development CA，而不允许明文bearer token。是否接受本地证书bootstrap复杂度？
-7. **registration receipt grace（推荐）**：成功后保留token hash对应的exact-retry receipt 5分钟，再彻底删除reservation；还是消费后立即失效、由SDK通过另一个非credential status机制恢复？
+1. bootstrap opaque token之外，强制使用audience=`org-worker-bootstrap`的Pod-bound projected ServiceAccount token + TokenReview；Worker ServiceAccount仍无Kubernetes API RBAC。
+2. MVP只接受platform-specific immutable image manifest digest；mutable tag、`tag@digest`与multi-arch index digest拒绝。
+3. credential TTL默认15分钟；Pod scheduled后的registration deadline默认10分钟；合法replacement Pod最多自动rotation一次。
+4. testkit/local sample允许显式disable bootstrap；platform hosted mode检测到bootstrap配置后fail-closed，不允许缺少字段时静默开始polling。
+5. contract/image/protocol/workload identity mismatch使WorkerVersion terminal failed；修复必须发布新version。dependency timeout只允许controller在deadline内有限重试。
+6. production internal endpoint强制TLS和内部service identity；kind使用开发CA，不允许明文传输bearer credential。
+7. successful registration保留token hash对应的exact-retry receipt 5分钟，随后删除credential reservation；durable registration record继续存在但不能用作一般credential。

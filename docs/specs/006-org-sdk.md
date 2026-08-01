@@ -6,11 +6,11 @@
 
 **Approved — implementation authorized on 2026-08-01.**
 
-### Pending Draft amendment: startup bootstrap registration
+### Approved amendment: startup bootstrap registration
 
-**Awaiting explicit user approval; not implemented.** See [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) for the proposed authoritative protocol. Until 012 is approved, the approved behavior below remains unchanged.
+**Approved for implementation.** [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is authoritative where older paragraphs below describe publish-request manifest bytes or a required generated manifest file.
 
-If approved, 012 supersedes statements below that make a generated manifest file or publish-request manifest bytes part of the runtime registration contract:
+012 supersedes statements below that make a generated manifest file or publish-request manifest bytes part of the runtime registration contract:
 
 - 用户仍只声明typed Definition并调用Org SDK hosted Worker启动入口；
 - SDK startup在内存中从typed Definition构造canonical manifest/digest，不读取用户管理的manifest file；
@@ -69,7 +69,7 @@ Temporal determinism、replay、Activity retry、Signal persistence、Timer、ca
 3. DAG template manifest、runtime projection 与实际 SDK primitives 使用同一份 typed Definition，避免 metadata 双写。
 4. 所有 Activity 具有稳定 runtime identity、显式 retry/timeout 与 side-effect policy。
 5. `WaitForAction` 等 idle node 使用 durable Signal wait，不占用 Activity worker。
-6. WorkerVersion 发布时携带可校验、与镜像及 SDK runtime 绑定的 canonical manifest。
+6. WorkerVersion发布先创建pending release；Org SDK startup从typed Definition构造canonical manifest并用deployment-bound credential注册。
 7. 长期 Pinned Run 在 Worker/SDK 升级后仍可 replay 和恢复。
 
 ## 非目标
@@ -438,15 +438,16 @@ Signal RPC success 只表示 delivery，不等于业务接受。query 与 Signal
 
 ## Manifest contract 与动态 DAG
 
-推荐 **code-first Definition + generated canonical manifest**：
+采用 **code-first Definition + startup canonical registration**：
 
 1. 用户声明 Workflow function 与 node/Activity/action templates；
-2. generator 做 template/schema/policy/bounds validation；
-3. 生成 canonical manifest、schemas 与 embedded digest；
-4. 用户 CI 构建 OCI image并附带 manifest digest/provenance；
-5. Worker startup 验证 Definition、embedded manifest 与 runtime protocol；
-6. WorkerVersion registration 提交 image digest、manifest、manifest digest 与 provenance；
-7. org 不构建或发布 image。
+2. SDK在build/test时做template/schema/policy/bounds validation；generated JSON只是可选CI/debug artifact；
+3. 用户CI构建OCI image；publish只提交不可变platform-specific image digest与provenance；
+4. org创建pending WorkerVersion并向候选Pod注入bound bootstrap credential；
+5. Worker startup从typed Definition在内存构造canonical manifest/digest并核对runtime protocol/Build ID；
+6. SDK幂等注册并await accepted/rejected；accepted后才启动Temporal Worker polling；
+7. org在poller ready后执行pinned contract probe，全部一致才promotion；
+8. org 不构建或发布 image。
 
 manifest 至少包含：
 
@@ -606,7 +607,7 @@ DetermineRoute Activity
 5. Activity hooks、write idempotency/reconciliation 与 ambiguous crash test；
 6. `WaitForAction` / `AwaitConfirmation` waiting、Signal dedupe、timeout/cancel/restart tests；
 7. action ledger/Signal lifecycle integration；
-8. manifest embed/probe 与 version compatibility；
+8. startup contract registration、poller/probe 与 version compatibility；
 9. SDK testkit；
 10. 最后编写高级 Sample 与真实 kind/Temporal E2E。
 

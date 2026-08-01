@@ -6,9 +6,9 @@
 
 **Approved — implementation authorized only after 006 Org SDK is implemented and verified.**
 
-### Pending Draft amendment: bootstrap consumer
+### Approved amendment: bootstrap consumer
 
-**Awaiting explicit user approval; not implemented.** If [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md) is approved, Hello Worker startup must call the Org SDK hosted entrypoint: typed Definition → in-memory canonical contract/digest → idempotent bootstrap registration → await accepted → start Temporal Worker polling. Sample用户不读取或提交manifest file。
+**Approved for implementation.** Per [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md), Hello Worker startup must call the Org SDK hosted entrypoint: typed Definition → in-memory canonical contract/digest → idempotent bootstrap registration → await accepted → start Temporal Worker polling. Sample用户不读取或提交manifest file。
 
 `generated/org-worker-manifest.json`降为可选golden/CI/debug artifact；它可以继续用于contract diff和测试，但删除该文件不得破坏正常hosted startup。真实E2E需验证registration后、polling前restart可exact retry，最终registration/poller/probe三项一致后Ready；现有Current与历史Pinned验收继续保留。
 
