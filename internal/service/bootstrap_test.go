@@ -97,7 +97,7 @@ func TestBootstrapRegistrationRejectsExpiredOrWrongImageWithoutWritingContract(t
 		TTL: time.Minute, Now: func() time.Time { return now },
 		Verifier: BootstrapWorkloadVerifierFunc(func(_ context.Context, binding domain.BootstrapBinding, evidence BootstrapWorkloadEvidence) error {
 			if evidence.ObservedImage != binding.ExpectedImage {
-				return errors.New("image mismatch")
+				return errBootstrapImageMismatch
 			}
 			return nil
 		}),
@@ -108,6 +108,15 @@ func TestBootstrapRegistrationRejectsExpiredOrWrongImageWithoutWritingContract(t
 	}
 	if _, err := registry.Register(context.Background(), material.Token, BootstrapWorkloadEvidence{ObservedImage: "registry.example.com/acme/other@sha256:" + strings.Repeat("b", 64)}, bootstrapContract(t, version.Version)); !errors.Is(err, ErrBootstrapRejected) {
 		t.Fatalf("wrong image error = %v", err)
+	}
+	imageMismatchAudited := false
+	for _, audit := range store.Audits(version.TenantID) {
+		if audit.Action == "worker.bootstrap.registration.rejected" && audit.ErrorClass == "image_mismatch" {
+			imageMismatchAudited = true
+		}
+	}
+	if !imageMismatchAudited {
+		t.Fatalf("image mismatch rejection Audit = %#v", store.Audits(version.TenantID))
 	}
 	stored, _ := store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
 	stored.RegistrationStatus = domain.BootstrapRegistrationAwaiting
@@ -309,7 +318,9 @@ func TestFileStoreBootstrapIssuanceAndRejectionAuditFailuresAreAtomic(t *testing
 	if err := store.SaveWorkerVersion(version.TenantID, version); err != nil {
 		t.Fatal(err)
 	}
-	registry := NewBootstrapRegistry(store, BootstrapRegistryConfig{Now: func() time.Time { return now }, Verifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return errors.New("identity mismatch") })})
+	registry := NewBootstrapRegistry(store, BootstrapRegistryConfig{Now: func() time.Time { return now }, Verifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error {
+		return errors.New("identity mismatch")
+	})})
 	injected := errors.New("injected bootstrap Audit persistence failure")
 	store.persistSnapshot = func(fileState) error { return injected }
 	if _, err := registry.Issue(version, "generation-1"); !errors.Is(err, injected) {
@@ -319,7 +330,7 @@ func TestFileStoreBootstrapIssuanceAndRejectionAuditFailuresAreAtomic(t *testing
 		t.Fatalf("failed issuance changed live state: credentials=%#v Audits=%#v", store.BootstrapCredentials(), store.Audits(version.TenantID))
 	}
 
-	store.persistSnapshot = nil
+	store.persistSnapshot = store.writeSnapshot
 	material, err := registry.Issue(version, "generation-1")
 	if err != nil {
 		t.Fatal(err)

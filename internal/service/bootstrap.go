@@ -16,9 +16,11 @@ import (
 )
 
 var (
-	ErrBootstrapExpired  = errors.New("bootstrap credential expired")
-	ErrBootstrapRejected = errors.New("bootstrap registration rejected")
-	ErrBootstrapConflict = errors.New("bootstrap registration conflicts with accepted contract")
+	ErrBootstrapExpired          = errors.New("bootstrap credential expired")
+	ErrBootstrapRejected         = errors.New("bootstrap registration rejected")
+	ErrBootstrapConflict         = errors.New("bootstrap registration conflicts with accepted contract")
+	errBootstrapWorkloadIdentity = errors.New("bootstrap workload identity mismatch")
+	errBootstrapImageMismatch    = errors.New("bootstrap workload image mismatch")
 )
 
 type BootstrapMaterial struct {
@@ -54,13 +56,13 @@ type StrictBootstrapWorkloadVerifier struct{}
 
 func (StrictBootstrapWorkloadVerifier) VerifyBootstrapWorkload(_ context.Context, binding domain.BootstrapBinding, evidence BootstrapWorkloadEvidence) error {
 	if !evidence.AudienceVerified || strings.TrimSpace(evidence.PodUID) == "" || evidence.ServiceAccount != binding.ExpectedServiceAccount {
-		return errors.New("bound Kubernetes workload identity is required")
+		return errBootstrapWorkloadIdentity
 	}
 	if evidence.TenantHash == "" || evidence.TenantHash != binding.TenantHash || evidence.WorkerName != binding.WorkerName || evidence.VersionHash == "" || evidence.VersionHash != binding.VersionHash || evidence.DeploymentGeneration == "" || evidence.DeploymentGeneration != binding.DeploymentGeneration || evidence.OwnerDeployment == "" || evidence.OwnerDeployment != binding.ExpectedDeployment {
-		return errors.New("candidate Pod labels, rollout generation, or Deployment owner do not match the bootstrap binding")
+		return errBootstrapWorkloadIdentity
 	}
 	if evidence.ObservedImage != binding.ExpectedImage || (evidence.RuntimeImageID != "" && evidence.RuntimeImageID != binding.ExpectedImage && !evidence.RuntimeLinkVerified) {
-		return errors.New("runtime Pod imageID does not match the expected immutable image digest")
+		return errBootstrapImageMismatch
 	}
 	return nil
 }
@@ -136,15 +138,23 @@ func (r *BootstrapRegistry) Register(ctx context.Context, token string, evidence
 	}
 	now := r.cfg.Now()
 	key := bootstrapRegistrationKey(credential.Binding, request)
-	verificationFailed := r.cfg.Verifier == nil || r.cfg.Verifier.VerifyBootstrapWorkload(ctx, credential.Binding, evidence) != nil
+	verificationErr := errBootstrapWorkloadIdentity
+	if r.cfg.Verifier != nil {
+		verificationErr = r.cfg.Verifier.VerifyBootstrapWorkload(ctx, credential.Binding, evidence)
+	}
+	verificationFailed := verificationErr != nil
+	verificationErrorClass := "workload_identity_mismatch"
+	if errors.Is(verificationErr, errBootstrapImageMismatch) {
+		verificationErrorClass = "image_mismatch"
+	}
 	if credential.AcceptedAt != nil && verificationFailed {
-		if auditErr := r.auditBootstrapRejection(credential, evidence, request, "workload_identity_mismatch", false, now); auditErr != nil {
+		if auditErr := r.auditBootstrapRejection(credential, evidence, request, verificationErrorClass, false, now); auditErr != nil {
 			return BootstrapRegistrationReceipt{}, errors.Join(ErrBootstrapRejected, auditErr)
 		}
 		return BootstrapRegistrationReceipt{}, ErrBootstrapRejected
 	}
 	if verificationFailed {
-		if auditErr := r.auditBootstrapRejection(credential, evidence, request, "workload_identity_mismatch", true, now); auditErr != nil {
+		if auditErr := r.auditBootstrapRejection(credential, evidence, request, verificationErrorClass, true, now); auditErr != nil {
 			return BootstrapRegistrationReceipt{}, errors.Join(ErrBootstrapRejected, auditErr)
 		}
 		return BootstrapRegistrationReceipt{}, ErrBootstrapRejected
