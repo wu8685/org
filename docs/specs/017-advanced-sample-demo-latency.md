@@ -56,4 +56,3 @@ approval-gate = waiting-for-user
 5. dynamic 每条 route 只覆盖 DetermineRoute、selected branch 与 Finalize；skipped branch delay/handler count 均为 0。
 6. Sample tests、race 与 vet 通过；README 说明可观察阶段、2–5 秒随机性及 production 禁止照搬。
 7. real `kind-org` + local Temporal E2E 观察上述 running/skipped 状态后完成，不以精确 wall-clock 作为断言。
-
