@@ -69,8 +69,14 @@ make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 2. 用 digest 发布 Version，并等待 SDK registration、poller 与 probe。
 3. 触发 `DynamicDecisionWorkflow`。Trigger editor 默认使用 YAML，可输入 `mode: concise` 和 `subject: release notes`；切换为 JSON 时输入 `{"mode":"concise","subject":"release notes"}`。只读 schema 只描述业务 payload，不生成固定字段。
 4. 可选填写 Run description，说明为何选择这次演示输入；它不属于 payload，也不要包含 Secret。
-5. 观察 `concise-branch=completed`、`detailed-branch=skipped` 与 `finalize=completed`。
+5. 先观察 `determine-route=running`；route 确定后，观察 `concise-branch=running`、`detailed-branch=skipped`，最后 `finalize=running` 并完成。
 6. 再用 `mode=detailed` 触发独立 Run，观察相反路径。
+
+## 教学演示延迟
+
+每条合法 route 只有 3 个实际 Activity 使用独立随机 2–5 秒延迟：`DetermineRoute`、被选中的 branch、`Finalize`。未选 branch 立即成为 `skipped`，不会执行 handler、取随机值或等待；它不能伪装成 `running`。每个 Run 通常约 6–15 秒再加少量调度开销即可完成。
+
+延迟仅用于教学演示，让 Console 有时间显示运行时决策过程。production Worker 不应照搬人为 sleep，应让 projection 反映真实 Activity 生命周期。取消 Run 时，Activity delay 会通过 context 及时中断。
 
 Org SDK 从 typed Definition 生成 contract 并在启动时自动注册。Console 只读展示 contract 和动态 DAG，不从 Temporal Event History 猜路径。
 

@@ -1,11 +1,32 @@
 package dynamicdecision
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/wu8685/org/sdk/orgsdk"
 )
+
+type demoDelaySource func(string) (time.Duration, error)
+type demoActivitySleeper func(context.Context, time.Duration) error
+
+type workerConfig struct {
+	delay demoDelaySource
+	sleep demoActivitySleeper
+}
+
+type WorkerOption func(*workerConfig)
+
+func withDemoDelaySource(source demoDelaySource) WorkerOption {
+	return func(config *workerConfig) { config.delay = source }
+}
+
+func withDemoActivitySleeper(sleeper demoActivitySleeper) WorkerOption {
+	return func(config *workerConfig) { config.sleep = sleeper }
+}
 
 type Worker struct {
 	Definition orgsdk.Definition
@@ -17,7 +38,24 @@ type Worker struct {
 	calls      map[string]*atomic.Int32
 }
 
-func NewWorker(version string) (Worker, error) {
+func NewWorker(version string, options ...WorkerOption) (Worker, error) {
+	config := workerConfig{delay: randomDemoDelay, sleep: sleepDemoActivity}
+	for _, option := range options {
+		option(&config)
+	}
+	if config.delay == nil || config.sleep == nil {
+		return Worker{}, errors.New("dynamic-decision demo delay source and sleeper are required")
+	}
+	wait := func(ctx context.Context, activity string) error {
+		delay, err := config.delay(activity)
+		if err != nil {
+			return err
+		}
+		if delay < minDemoDelay || delay > maxDemoDelay {
+			return fmt.Errorf("%s demo delay %s is outside [2s, 5s]", activity, delay)
+		}
+		return config.sleep(ctx, delay)
+	}
 	calls := map[string]*atomic.Int32{
 		"determine-route": {}, "concise-branch": {}, "detailed-branch": {}, "finalize": {},
 	}
@@ -28,20 +66,32 @@ func NewWorker(version string) (Worker, error) {
 			MaximumInterval: 2 * time.Second, MaximumAttempts: 3, StartToCloseTimeout: 10 * time.Second,
 		},
 	}
-	determine := orgsdk.NewActivity("determine-route", policy, func(_ orgsdk.ActivityContext, input Input) (Route, error) {
+	determine := orgsdk.NewActivity("determine-route", policy, func(ctx orgsdk.ActivityContext, input Input) (Route, error) {
 		calls["determine-route"].Add(1)
+		if err := wait(ctx.Context, "determine-route"); err != nil {
+			return Route{}, err
+		}
 		return DetermineRoute(input)
 	})
-	concise := orgsdk.NewActivity("concise-branch", policy, func(_ orgsdk.ActivityContext, input BranchInput) (BranchResult, error) {
+	concise := orgsdk.NewActivity("concise-branch", policy, func(ctx orgsdk.ActivityContext, input BranchInput) (BranchResult, error) {
 		calls["concise-branch"].Add(1)
+		if err := wait(ctx.Context, "concise-branch"); err != nil {
+			return BranchResult{}, err
+		}
 		return RunConcise(input)
 	})
-	detailed := orgsdk.NewActivity("detailed-branch", policy, func(_ orgsdk.ActivityContext, input BranchInput) (BranchResult, error) {
+	detailed := orgsdk.NewActivity("detailed-branch", policy, func(ctx orgsdk.ActivityContext, input BranchInput) (BranchResult, error) {
 		calls["detailed-branch"].Add(1)
+		if err := wait(ctx.Context, "detailed-branch"); err != nil {
+			return BranchResult{}, err
+		}
 		return RunDetailed(input)
 	})
-	finalize := orgsdk.NewActivity("finalize", policy, func(_ orgsdk.ActivityContext, input FinalizeInput) (Result, error) {
+	finalize := orgsdk.NewActivity("finalize", policy, func(ctx orgsdk.ActivityContext, input FinalizeInput) (Result, error) {
 		calls["finalize"].Add(1)
+		if err := wait(ctx.Context, "finalize"); err != nil {
+			return Result{}, err
+		}
 		return Finalize(input)
 	})
 	definition := orgsdk.NewDefinition[Input, Result]("dynamic-decision", []orgsdk.NodeTemplate{

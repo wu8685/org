@@ -71,8 +71,14 @@ make kind-load VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
 2. 用上一步 digest 发布 Version，并等待 SDK registration、poller 与 probe。
 3. 触发 `ParallelConfirmationWorkflow`。Trigger editor 默认使用 YAML，可输入 `subject: release notes`；切换为 JSON 时输入 `{"subject":"release notes"}`。只读 schema 仅供核对复杂 payload，不生成标准表单字段。
 4. 可选填写 Run description，说明这一次审批为何发起；它不属于 payload，也不要包含 Secret。
-5. Run detail 先显示 `approval-gate = waiting-for-user` 和 `confirm` action。
-6. 提交确认后，观察两个 running branch、join 与 finalize 依次完成。
+5. Run detail 先显示 `approval-gate = waiting-for-user` 和 `confirm` action。这个 idle wait 不执行 Activity，也不加入人为延迟。
+6. 提交确认后，先观察 `BuildPlan` 为 `running`，再观察两个 branch 同时为 `running`；双分支完成后，join 与 `Finalize` 依次完成。
+
+## 教学演示延迟
+
+确认后的每个实际 Activity 都有独立随机 2–5 秒延迟：`BuildPlan` 一次、两个 `ExecuteBranch` 各一次、`Finalize` 一次。随机值彼此独立，因此两个并行 branch 可能先后完成；这不改变 fork/join dependency 或业务结果。确认后通常约 6–15 秒再加少量调度开销即可完成。
+
+延迟仅用于教学演示，让 Console 有时间显示 `running` projection。production Worker 不应照搬人为 sleep，应让 projection 反映真实 Activity 生命周期。取消 Run 时，Activity delay 会通过 context 及时中断。
 
 Gateway 会校验 Tenant、permission、input schema、projection revision 与 `Idempotency-Key`。终端用户不直连 Temporal，也不直接发送 Signal。
 

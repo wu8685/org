@@ -55,6 +55,9 @@ func TestLocalDynamicDecisionAcceptance(t *testing.T) {
 				t.Fatalf("start %s route: %v", test.mode, err)
 			}
 			run.trackInvocation(auth, invocation.ID)
+			waitForProjectionNode(t, ctx, controlPlane, auth, invocation.ID, "determine-route", orgsdk.NodeStatusRunning)
+			waitForDynamicSelectedRunningAndSkipped(t, ctx, controlPlane, auth, invocation.ID, test.selected, test.skipped)
+			waitForProjectionNode(t, ctx, controlPlane, auth, invocation.ID, "finalize", orgsdk.NodeStatusRunning)
 			view := waitForDynamicCompletedProjection(t, ctx, controlPlane, auth, invocation.ID, test.selected, test.skipped)
 			assertDynamicDecisionResult(t, view, image.version, test.mode)
 			response := httptest.NewRecorder()
@@ -63,6 +66,34 @@ func TestLocalDynamicDecisionAcceptance(t *testing.T) {
 				t.Fatalf("Console dynamic projection status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func waitForDynamicSelectedRunningAndSkipped(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, runID, selectedTemplate, skippedTemplate string) service.InvocationView {
+	t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		view, err := control.GetInvocation(ctx, auth, runID)
+		if err == nil && view.SemanticProjection != nil {
+			var selected, skipped orgsdk.NodeProjection
+			for _, node := range view.SemanticProjection.Nodes {
+				switch node.TemplateID {
+				case selectedTemplate:
+					selected = node
+				case skippedTemplate:
+					skipped = node
+				}
+			}
+			if selected.Status == orgsdk.NodeStatusRunning && skipped.Status == orgsdk.NodeStatusSkipped && skipped.ReasonCode == "route-not-selected" {
+				return view
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for selected running and unselected skipped: %v (last err: %v)", ctx.Err(), err)
+		case <-ticker.C:
+		}
 	}
 }
 

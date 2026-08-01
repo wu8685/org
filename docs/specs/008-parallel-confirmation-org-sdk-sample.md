@@ -12,6 +12,8 @@
 
 Per [`014-sample-slimming.md`](014-sample-slimming.md)，Sample repository不保留generator或checked-in generated contract；测试直接从typed Definition验证contract。真实E2E除既有idle action/restart/fork/join外，还须证明bootstrap exact retry不重复注册、registration后poller缺失不会Ready，并在poller + pinned verification成功后promotion。
 
+[`017-advanced-sample-demo-latency.md`](017-advanced-sample-demo-latency.md) 是已批准 amendment：实际执行的 BuildPlan、两个独立 branch 与 Finalize Activity 各自等待随机 2–5 秒，以便观察 `running` projection；approval idle wait 不延迟。
+
 当前只授权规格与 README 设计。不得在 SDK 验证及 Hello 迁移完成前创建 Sample 实现。
 
 ## 目标与叙事

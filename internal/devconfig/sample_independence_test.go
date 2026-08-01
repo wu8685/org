@@ -247,7 +247,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	}
 	for _, relative := range []string{"samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
-		for _, want := range []string{"100m", "128Mi", "production", "Activity"} {
+		for _, want := range []string{"100m", "128Mi", "production", "Activity", "2–5 秒", "随机", "running", "仅用于教学演示"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing resource guidance %q", relative, want)
 			}

@@ -1,6 +1,7 @@
 package parallelconfirmation
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,10 +9,7 @@ import (
 )
 
 func TestDefinitionDeclaresApprovalDynamicForkJoinAndFinalize(t *testing.T) {
-	worker, err := NewWorker("v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := newTestWorker(t)
 	want := []struct {
 		id          string
 		nodeType    orgsdk.NodeType
@@ -39,10 +37,7 @@ func TestDefinitionDeclaresApprovalDynamicForkJoinAndFinalize(t *testing.T) {
 }
 
 func TestWorkflowWaitsIdleThenRunsTwoBranchesAndJoins(t *testing.T) {
-	worker, err := NewWorker("v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := newTestWorker(t)
 	env := orgsdk.NewTestEnvironment()
 	if err := env.Register(worker.Registrations()...); err != nil {
 		t.Fatal(err)
@@ -87,4 +82,16 @@ func TestWorkflowWaitsIdleThenRunsTwoBranchesAndJoins(t *testing.T) {
 	if len(statuses["execute-branch"]) != 2 || len(statuses["join"][0].Dependencies) != 2 || len(statuses["finalize"][0].Dependencies) != 1 {
 		t.Fatalf("fork/join projection = %#v", projection.Nodes)
 	}
+}
+
+func newTestWorker(t *testing.T) Worker {
+	t.Helper()
+	worker, err := NewWorker("v1",
+		withDemoDelaySource(func(string) (time.Duration, error) { return minDemoDelay, nil }),
+		withDemoActivitySleeper(func(context.Context, time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return worker
 }

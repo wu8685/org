@@ -69,6 +69,9 @@ func TestLocalParallelConfirmationAcceptance(t *testing.T) {
 		t.Fatalf("action delivery first=%#v second=%#v", first, second)
 	}
 
+	waitForProjectionNode(t, ctx, controlPlane, auth, invocation.ID, "build-plan", orgsdk.NodeStatusRunning)
+	waitForParallelBranchesRunning(t, ctx, controlPlane, auth, invocation.ID)
+	waitForProjectionNode(t, ctx, controlPlane, auth, invocation.ID, "finalize", orgsdk.NodeStatusRunning)
 	completed := waitForParallelCompletedProjection(t, ctx, controlPlane, auth, invocation.ID)
 	if completed.Invocation.SelectedVersion != image.version {
 		t.Fatalf("selected version = %q, want %q", completed.Invocation.SelectedVersion, image.version)
@@ -83,6 +86,31 @@ func TestLocalParallelConfirmationAcceptance(t *testing.T) {
 		t.Fatalf("reconciled action = %#v, exists=%v", operation, ok)
 	}
 	assertParallelActionAudit(t, run, auth, invocation.ID, operationID)
+}
+
+func waitForParallelBranchesRunning(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, runID string) service.InvocationView {
+	t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		view, err := control.GetInvocation(ctx, auth, runID)
+		if err == nil && view.SemanticProjection != nil {
+			running := 0
+			for _, node := range view.SemanticProjection.Nodes {
+				if node.TemplateID == "execute-branch" && node.Status == orgsdk.NodeStatusRunning {
+					running++
+				}
+			}
+			if running == 2 {
+				return view
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for both parallel branches running: %v (last err: %v)", ctx.Err(), err)
+		case <-ticker.C:
+		}
+	}
 }
 
 func submitConsoleAction(t *testing.T, handler http.Handler, runID, nodeID, operationID string, projectionRevision uint64) domain.ActionOperation {

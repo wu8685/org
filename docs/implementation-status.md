@@ -26,6 +26,7 @@ Implemented and covered by tests:
 - `samples/hello`: minimal sequential typed Workflow, migrated off raw Temporal authoring;
 - `samples/parallel-confirmation`: idle approval gate, authorized action, dynamic two-branch fork/join, Worker restart and action reconciliation;
 - `samples/dynamic-decision`: recorded Activity result selects one branch, exposes the unselected candidate as `skipped`, and converges at finalize.
+- advanced Sample demo latency is Activity-local, independently randomized within 2–5 seconds and context-cancelable: parallel-confirmation exposes BuildPlan, two simultaneously running branches and Finalize; dynamic-decision delays only DetermineRoute, the selected branch and Finalize while the unselected node is immediately `skipped`;
 - all three Samples are self-contained Worker repositories with their own versioned Go module, Makefile, Docker context, build/push/kind scripts and value-first README; the publish request example is centralized under `docs/api`, and root targets only delegate;
 - Sample repositories no longer contain a manifest generator, checked-in generated contract, control-plane publish body or redundant local runtime-config wrapper; SDK host-entrypoint simplification remains a separate follow-up;
 - Tenant-derived Console HTTP/JSON API with stable errors, CSRF, request IDs, overview/quota read model, Worker/Version/Workflow/Run resources, async publish polling, revision-safe description updates, Current/historical Run starts, cancel, projection-constrained Gateway actions and action outcome polling;
@@ -52,6 +53,7 @@ Latest local verification on 2026-08-02:
 - all three independent Sample modules passed `go test -race ./...` and `go vet ./...`;
 - `make sdk-temporal-test` passed real Worker stop/Signal/restart/replay verification;
 - `make e2e-local`, `make parallel-e2e-local`, and `make dynamic-e2e-local` passed against the running local Temporal service and `kind-org`;
+- parallel and dynamic E2E explicitly observed the new non-exact timing windows: both parallel branches were `running` in one projection, and each dynamic selected branch was `running` while its unselected candidate was already `skipped`;
 - automatic cleanup removed each test platform Kubernetes Namespace and test-created image.
 - copied-directory independence tests, real standalone Docker builds, registry-digest push contract tests, documentation links/terminology checks and Sample-directory-owned kind-load paths passed.
 - Sample slimming acceptance passed after removing obsolete artifacts: centralized publish-contract validation, stale-path checks, all three copied modules, and all three real kind + Temporal paths remain green.

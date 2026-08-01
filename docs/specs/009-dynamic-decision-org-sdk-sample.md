@@ -12,6 +12,8 @@
 
 Per [`014-sample-slimming.md`](014-sample-slimming.md)，Sample repository不保留generator或checked-in generated contract；测试直接从typed Definition验证contract。真实E2E继续验证两条runtime route与`skipped`projection，并新增registration identity/image/protocol binding、restart exact retry与poller/probe promotion gate。
 
+[`017-advanced-sample-demo-latency.md`](017-advanced-sample-demo-latency.md) 是已批准 amendment：DetermineRoute、实际 selected branch 与 Finalize Activity 各自等待随机 2–5 秒；未选 candidate 立即投影为 `skipped`，不得调用 delay。
+
 当前只授权规格与 README 设计。它是三个 Sample 中最后实施的一项。
 
 ## 目标与叙事

@@ -1,17 +1,16 @@
 package dynamicdecision
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/sdk/orgsdk"
 )
 
 func TestDefinitionDeclaresRecordedRouteBothCandidatesAndFinalize(t *testing.T) {
-	worker, err := NewWorker("v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := newTestWorker(t)
 	want := []string{"determine-route", "concise-branch", "detailed-branch", "finalize"}
 	if len(worker.Definition.Templates) != len(want) {
 		t.Fatalf("templates = %#v", worker.Definition.Templates)
@@ -33,10 +32,7 @@ func TestWorkflowExecutesOnlySelectedCandidateAndProjectsSkippedNode(t *testing.
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
-			worker, err := NewWorker("v1")
-			if err != nil {
-				t.Fatal(err)
-			}
+			worker := newTestWorker(t)
 			env := orgsdk.NewTestEnvironment()
 			if err := env.Register(worker.Registrations()...); err != nil {
 				t.Fatal(err)
@@ -83,10 +79,7 @@ func TestRuntimeNodeIDsAreStableForSameRoute(t *testing.T) {
 }
 
 func TestInvalidRouteFailsWithoutFallback(t *testing.T) {
-	worker, err := NewWorker("v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := newTestWorker(t)
 	env := orgsdk.NewTestEnvironment()
 	if err := env.Register(worker.Registrations()...); err != nil {
 		t.Fatal(err)
@@ -118,10 +111,7 @@ func nodeByTemplate(projection orgsdk.Projection, templateID string) orgsdk.Node
 
 func executeProjection(t *testing.T, mode string) orgsdk.Projection {
 	t.Helper()
-	worker, err := NewWorker("v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := newTestWorker(t)
 	env := orgsdk.NewTestEnvironment()
 	if err := env.Register(worker.Registrations()...); err != nil {
 		t.Fatal(err)
@@ -135,4 +125,16 @@ func executeProjection(t *testing.T, mode string) orgsdk.Projection {
 		t.Fatal(err)
 	}
 	return projection
+}
+
+func newTestWorker(t *testing.T) Worker {
+	t.Helper()
+	worker, err := NewWorker("v1",
+		withDemoDelaySource(func(string) (time.Duration, error) { return minDemoDelay, nil }),
+		withDemoActivitySleeper(func(context.Context, time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return worker
 }
