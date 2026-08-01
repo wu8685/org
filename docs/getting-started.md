@@ -165,13 +165,37 @@ prepare-greeting → compose-greeting → completed
 
 ## 第 7 步：清理
 
-停止终端 A 和 B 中的进程。如果不再需要本地 cluster，在仓库根目录运行：
+普通结束只需停止终端 A 和 B 中的进程。Worker、Version 和 Run 会保存在本仓库的 local demo 数据中，方便下次继续。
+
+如果需要重新从空 demo 开始，见下一节。如果连本地 cluster 也不再需要，可以运行：
 
 ```sh
 make kind-down
 ```
 
 该命令只删除 `kind-org`，不会删除无关 Kubernetes cluster。
+
+## 重置本地 demo
+
+遇到失败发布或想重新演示 golden path 时，可以使用仓库提供的受限 reset。先停止终端 A 的 Temporal 和终端 B 的 Console；脚本检测到端口 `7233` 或 `8090` 仍被监听时会拒绝执行，不会直接终止进程。
+
+先查看精确计划：
+
+```sh
+make demo-reset-dry-run
+```
+
+确认后执行：
+
+```sh
+RESET_DEMO=1 make demo-reset
+```
+
+该命令只处理本仓库 `.org/state.json`、`.org/temporal.db` 及其精确 SQLite sidecar，以及固定 `kind-org` / `org-workers` 中带 org 标记的 demo resource。原文件会移动到输出所示的 `.org/reset-backups/` 私有备份；kind cluster、Docker/kind image、E2E resource 和其他 platform Kubernetes Namespace 均保留。脚本不调用 Temporal deletion API，也不接触远程 Temporal resource。
+
+完成后重新执行第 2、3 步的启动命令。Console 应只显示自动初始化的 local Tenant，Workers 和 Runs 为空，`org-workers` 保持 `Active`。
+
+如需恢复 control-plane 或 Temporal 数据，先再次停止两个进程，再把目标备份目录中的文件移回 `.org/`。Kubernetes workload 不在备份中；重新发布 WorkerVersion 即可重建。
 
 ## 成功之后学什么
 

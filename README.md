@@ -97,6 +97,17 @@ Tenant
 
 完整阅读路径见 [文档首页](docs/README.md)，三个 Sample 的差异见 [Sample 学习路径](samples/README.md)。
 
+## 重置本地 demo
+
+如果本地试验留下了失败 Version 或候选 Pod，先停止 Console 和本地 Temporal，再在仓库根目录检查并执行受限 reset：
+
+```sh
+make demo-reset-dry-run
+RESET_DEMO=1 make demo-reset
+```
+
+reset 会把本仓库的 control-plane state 与 Temporal development database 移入 `.org/reset-backups/` 备份，并清理固定 `kind-org` / `org-workers` 中带 org 标记的 demo workload。它保留 kind cluster、镜像、E2E 资源及其他 platform Kubernetes Namespace；恢复方式和完整检查点见 [本地快速上手](docs/getting-started.md#重置本地-demo)。
+
 ## 使用边界
 
 - Workflow code 不能执行外部 I/O；外部调用放在 Activity 中。

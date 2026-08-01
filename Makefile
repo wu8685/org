@@ -1,4 +1,4 @@
-.PHONY: check-tools kind-up kind-down temporal-dev console-dev console-test docs-test backend-test sdk-temporal-test sample-test sample-image sample-kind-load parallel-sample-test parallel-sample-image parallel-sample-kind-load dynamic-sample-test dynamic-sample-image dynamic-sample-kind-load e2e-preflight e2e-local parallel-e2e-local dynamic-e2e-local e2e-clean
+.PHONY: check-tools kind-up kind-down temporal-dev console-dev demo-reset demo-reset-dry-run demo-reset-test console-test docs-test backend-test sdk-temporal-test sample-test sample-image sample-kind-load parallel-sample-test parallel-sample-image parallel-sample-kind-load dynamic-sample-test dynamic-sample-image dynamic-sample-kind-load e2e-preflight e2e-local parallel-e2e-local dynamic-e2e-local e2e-clean
 
 SAMPLE_IMAGE_REPOSITORY ?=
 SAMPLE_VERSION ?=
@@ -23,6 +23,15 @@ temporal-dev:
 console-dev:
 	@go run ./cmd/org-console
 
+demo-reset:
+	@sh scripts/demo-reset.sh
+
+demo-reset-dry-run:
+	@sh scripts/demo-reset.sh --dry-run
+
+demo-reset-test:
+	@sh scripts/demo-reset_test.sh
+
 console-test:
 	@go test ./internal/console ./cmd/org-console
 
@@ -30,7 +39,7 @@ docs-test:
 	@sh scripts/check-doc-terminology.sh
 	@sh scripts/check-doc-format.sh
 
-backend-test:
+backend-test: demo-reset-test
 	@go test ./...
 
 sdk-temporal-test:

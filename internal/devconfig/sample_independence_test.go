@@ -212,6 +212,30 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	}
 }
 
+func TestLocalDemoResetIsDiscoverableAndKeepsFixedOwnershipBoundaries(t *testing.T) {
+	root := filepath.Join("..", "..")
+	makefile := read(t, filepath.Join(root, "Makefile"))
+	for _, want := range []string{"demo-reset:", "demo-reset-dry-run:", "sh scripts/demo-reset.sh", "sh scripts/demo-reset_test.sh"} {
+		if !strings.Contains(makefile, want) {
+			t.Errorf("Makefile missing local demo reset entry %q", want)
+		}
+	}
+	for _, relative := range []string{"README.md", "docs/getting-started.md"} {
+		contents := read(t, filepath.Join(root, relative))
+		for _, want := range []string{"make demo-reset-dry-run", "RESET_DEMO=1 make demo-reset", "停止", "备份"} {
+			if !strings.Contains(contents, want) {
+				t.Errorf("%s missing reset guidance %q", relative, want)
+			}
+		}
+	}
+	script := read(t, filepath.Join(root, "scripts", "demo-reset.sh"))
+	for _, forbidden := range []string{"kind delete", "temporal workflow delete", "docker image rm", "crictl rmi", "org-e2e-", "${NAMESPACE", "${KUBE_CONTEXT"} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("demo reset crosses fixed local ownership via %q", forbidden)
+		}
+	}
+}
+
 func TestApprovedDocsDoNotRetainRemovedSampleArtifactPaths(t *testing.T) {
 	root := filepath.Join("..", "..")
 	for _, relative := range []string{
