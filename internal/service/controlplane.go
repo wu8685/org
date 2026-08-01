@@ -150,6 +150,7 @@ type Store interface {
 	SaveBootstrapCredential(domain.BootstrapCredential) error
 	BootstrapCredential(string) (domain.BootstrapCredential, bool)
 	BootstrapCredentials() []domain.BootstrapCredential
+	CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, domain.AuditRecord) error
 }
 
 type ControlPlane struct {

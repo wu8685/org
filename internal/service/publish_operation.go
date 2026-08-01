@@ -192,12 +192,16 @@ func (s *FileStore) ReservePublishOperation(candidate domain.PublishOperation, n
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, existing := range s.state.PublishOperations {
+	next, err := cloneFileState(s.state)
+	if err != nil {
+		return domain.PublishOperation{}, false, err
+	}
+	for key, existing := range next.PublishOperations {
 		if !samePublishOperationScope(existing, candidate) {
 			continue
 		}
 		if publishOperationExpired(existing, now) {
-			delete(s.state.PublishOperations, key)
+			delete(next.PublishOperations, key)
 			continue
 		}
 		if existing.PayloadDigest != candidate.PayloadDigest {
@@ -205,11 +209,11 @@ func (s *FileStore) ReservePublishOperation(candidate domain.PublishOperation, n
 		}
 		return existing, false, nil
 	}
-	s.state.PublishOperations[tenantKey(candidate.TenantID, candidate.ID)] = candidate
-	if err := s.persist(); err != nil {
-		delete(s.state.PublishOperations, tenantKey(candidate.TenantID, candidate.ID))
+	next.PublishOperations[tenantKey(candidate.TenantID, candidate.ID)] = candidate
+	if err := s.persistSnapshot(next); err != nil {
 		return domain.PublishOperation{}, false, err
 	}
+	s.state = next
 	return candidate, true, nil
 }
 
@@ -222,8 +226,10 @@ func (s *FileStore) SavePublishOperation(tenantID string, operation domain.Publi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.PublishOperations[tenantKey(tenantID, operation.ID)] = operation
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.PublishOperations[tenantKey(tenantID, operation.ID)] = operation
+		return nil
+	})
 }
 
 func (s *FileStore) PublishOperation(tenantID, operationID string) (domain.PublishOperation, bool) {

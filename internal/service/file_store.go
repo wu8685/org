@@ -23,9 +23,10 @@ type fileState struct {
 	BootstrapCredentials map[string]domain.BootstrapCredential `json:"bootstrapCredentials"`
 }
 type FileStore struct {
-	mu    sync.RWMutex
-	path  string
-	state fileState
+	mu              sync.RWMutex
+	path            string
+	state           fileState
+	persistSnapshot func(fileState) error
 }
 
 func NewFileStore(path string) (*FileStore, error) {
@@ -33,6 +34,7 @@ func NewFileStore(path string) (*FileStore, error) {
 		return nil, errors.New("state file path is required")
 	}
 	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}}}
+	s.persistSnapshot = s.writeSnapshot
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -79,8 +81,10 @@ func (s *FileStore) SaveBootstrapCredential(credential domain.BootstrapCredentia
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.BootstrapCredentials[credential.TokenHash] = credential
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.BootstrapCredentials[credential.TokenHash] = credential
+		return nil
+	})
 }
 func (s *FileStore) BootstrapCredential(tokenHash string) (domain.BootstrapCredential, bool) {
 	s.mu.RLock()
@@ -112,8 +116,10 @@ func (s *FileStore) SaveTenant(tenant domain.Tenant) error {
 			return errors.New("tenant slug is immutable")
 		}
 	}
-	s.state.Tenants[tenant.ID] = tenant
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.Tenants[tenant.ID] = tenant
+		return nil
+	})
 }
 func (s *FileStore) Tenant(id string) (domain.Tenant, bool) {
 	s.mu.RLock()
@@ -137,8 +143,10 @@ func (s *FileStore) SaveWorker(tenantID string, worker domain.Worker) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Workers[tenantKey(tenantID, worker.Name)] = worker
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.Workers[tenantKey(tenantID, worker.Name)] = worker
+		return nil
+	})
 }
 func (s *FileStore) Worker(tenantID, name string) (domain.Worker, bool) {
 	s.mu.RLock()
@@ -163,8 +171,10 @@ func (s *FileStore) SaveWorkerVersion(tenantID string, d domain.WorkerVersion) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.WorkerVersions[tenantKey(tenantID, d.ID)] = d
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.WorkerVersions[tenantKey(tenantID, d.ID)] = d
+		return nil
+	})
 }
 func (s *FileStore) WorkerVersions(tenantID, workerName string) []domain.WorkerVersion {
 	s.mu.RLock()
@@ -196,8 +206,11 @@ func (s *FileStore) UpdateWorkerVersionDescription(tenantID, workerName, version
 				return domain.WorkerVersion{}, ErrConflict
 			}
 			item.Description, item.Revision, item.UpdatedAt = description, item.Revision+1, time.Now().UTC()
-			s.state.WorkerVersions[key] = item
-			return item, s.persist()
+			err := s.mutate(func(next *fileState) error {
+				next.WorkerVersions[key] = item
+				return nil
+			})
+			return item, err
 		}
 	}
 	return domain.WorkerVersion{}, ErrNotFound
@@ -208,8 +221,10 @@ func (s *FileStore) SaveInvocation(tenantID string, i domain.Invocation) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Invocations[tenantKey(tenantID, i.ID)] = i
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.Invocations[tenantKey(tenantID, i.ID)] = i
+		return nil
+	})
 }
 func (s *FileStore) Invocation(tenantID, id string) (domain.Invocation, bool) {
 	s.mu.RLock()
@@ -245,8 +260,10 @@ func (s *FileStore) SaveActionOperation(tenantID string, operation domain.Action
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.ActionOperations[actionOperationKey(tenantID, operation.RunID, operation.RuntimeNodeID, operation.Action, operation.OperationID)] = operation
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.ActionOperations[actionOperationKey(tenantID, operation.RunID, operation.RuntimeNodeID, operation.Action, operation.OperationID)] = operation
+		return nil
+	})
 }
 
 func (s *FileStore) ActionOperation(tenantID, runID, nodeID, action, operationID string) (domain.ActionOperation, bool) {
@@ -273,8 +290,10 @@ func (s *FileStore) AppendAudit(tenantID string, record domain.AuditRecord) erro
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Audits[tenantID] = append(s.state.Audits[tenantID], record)
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.Audits[tenantID] = append(next.Audits[tenantID], record)
+		return nil
+	})
 }
 
 func (s *FileStore) Audits(tenantID string) []domain.AuditRecord {
@@ -283,11 +302,38 @@ func (s *FileStore) Audits(tenantID string) []domain.AuditRecord {
 	return append([]domain.AuditRecord(nil), s.state.Audits[tenantID]...)
 }
 
-func (s *FileStore) persist() error {
+func (s *FileStore) mutate(apply func(*fileState) error) error {
+	next, err := cloneFileState(s.state)
+	if err != nil {
+		return err
+	}
+	if err := apply(&next); err != nil {
+		return err
+	}
+	if err := s.persistSnapshot(next); err != nil {
+		return err
+	}
+	s.state = next
+	return nil
+}
+
+func cloneFileState(state fileState) (fileState, error) {
+	b, err := json.Marshal(state)
+	if err != nil {
+		return fileState{}, err
+	}
+	var clone fileState
+	if err := json.Unmarshal(b, &clone); err != nil {
+		return fileState{}, err
+	}
+	return clone, nil
+}
+
+func (s *FileStore) writeSnapshot(state fileState) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	b, err := json.MarshalIndent(s.state, "", "  ")
+	b, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}

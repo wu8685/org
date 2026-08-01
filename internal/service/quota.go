@@ -169,15 +169,19 @@ func (s *FileStore) AcquireQuotaLease(tenantID string, lease domain.QuotaLease) 
 	if err := checkQuota(tenant.QuotaPolicy, existing, lease); err != nil {
 		return err
 	}
-	s.state.QuotaLeases[key] = lease
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		next.QuotaLeases[key] = lease
+		return nil
+	})
 }
 
 func (s *FileStore) ReleaseQuotaLease(tenantID, leaseID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.state.QuotaLeases, tenantKey(tenantID, leaseID))
-	return s.persist()
+	return s.mutate(func(next *fileState) error {
+		delete(next.QuotaLeases, tenantKey(tenantID, leaseID))
+		return nil
+	})
 }
 
 func (s *FileStore) QuotaLeases(tenantID string) []domain.QuotaLease {
@@ -196,14 +200,23 @@ func (s *FileStore) ReconcileQuotaLeases(tenantID string, activeIDs map[string]b
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	removed := 0
-	for key, lease := range s.state.QuotaLeases {
+	for _, lease := range s.state.QuotaLeases {
 		if lease.TenantID == tenantID && !activeIDs[lease.ID] {
-			delete(s.state.QuotaLeases, key)
 			removed++
 		}
 	}
 	if removed == 0 {
 		return 0, nil
 	}
-	return removed, s.persist()
+	if err := s.mutate(func(next *fileState) error {
+		for key, lease := range next.QuotaLeases {
+			if lease.TenantID == tenantID && !activeIDs[lease.ID] {
+				delete(next.QuotaLeases, key)
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return removed, nil
 }

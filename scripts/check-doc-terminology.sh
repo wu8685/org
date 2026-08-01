@@ -16,6 +16,7 @@ docs/specs/011-console-ui-http-api.md
 docs/specs/012-worker-bootstrap-registration.md
 docs/specs/013-sample-repository-independence.md
 docs/specs/014-sample-slimming.md
+docs/specs/015-review-fixes.md
 docs/ui-sdd-input.md
 docs/development.md
 docs/implementation-status.md

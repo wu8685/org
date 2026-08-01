@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -168,21 +169,97 @@ func (r *BootstrapRegistry) Register(ctx context.Context, token string, evidence
 	credential.AcceptedAt, credential.ReceiptUntil, credential.Revoked = &accepted, &receiptUntil, true
 	version.ManifestDigest, version.Metadata = request.ManifestDigest, request.Metadata
 	version.RegistrationStatus, version.RegisteredAt, version.UpdatedAt = domain.BootstrapRegistrationAccepted, &accepted, accepted
-	if err := r.store.SaveWorkerVersion(version.TenantID, version); err != nil {
-		return BootstrapRegistrationReceipt{}, err
-	}
-	if err := r.store.SaveBootstrapCredential(credential); err != nil {
-		return BootstrapRegistrationReceipt{}, err
-	}
-	if err := r.store.AppendAudit(version.TenantID, domain.AuditRecord{
+	audit := domain.AuditRecord{
 		ID: randomID("aud"), TenantID: version.TenantID, TenantSlug: version.TenantSlug,
 		PrincipalID: "worker-bootstrap", AuthenticationMethod: "kubernetes-tokenreview",
 		Action: "worker.contract.register", Permission: "bootstrap:register-contract", AuthorizationResult: "allowed", Outcome: "accepted",
 		TargetType: "workerVersion", TargetID: version.ID, References: map[string]string{"workerName": version.WorkerName, "version": version.Version, "manifestDigest": request.ManifestDigest}, CreatedAt: accepted,
-	}); err != nil {
+	}
+	if err := r.store.CommitBootstrapAcceptance(version.TenantID, version, credential, audit); err != nil {
 		return BootstrapRegistrationReceipt{}, err
 	}
 	return BootstrapRegistrationReceipt{ID: credential.ReceiptID, WorkerVersionID: version.ID, ManifestDigest: request.ManifestDigest, AcceptedAt: accepted}, nil
+}
+
+func validateBootstrapAcceptance(tenantID string, currentVersion, acceptedVersion domain.WorkerVersion, currentCredential, acceptedCredential domain.BootstrapCredential, audit domain.AuditRecord) error {
+	if tenantID == "" || acceptedVersion.TenantID != tenantID || audit.TenantID != tenantID {
+		return errors.New("bootstrap acceptance tenant identity mismatch")
+	}
+	if currentVersion.ID == "" || currentVersion.ID != acceptedVersion.ID || currentVersion.WorkerName != acceptedVersion.WorkerName || currentVersion.Version != acceptedVersion.Version || currentVersion.Image != acceptedVersion.Image {
+		return ErrBootstrapRejected
+	}
+	if currentVersion.State != domain.WorkerVersionPending || currentVersion.ManifestDigest != "" || currentVersion.RegistrationStatus == domain.BootstrapRegistrationAccepted {
+		return ErrBootstrapConflict
+	}
+	if acceptedVersion.State != domain.WorkerVersionPending || acceptedVersion.ManifestDigest == "" || acceptedVersion.RegistrationStatus != domain.BootstrapRegistrationAccepted || acceptedVersion.RegisteredAt == nil {
+		return ErrBootstrapRejected
+	}
+	expectedVersion := currentVersion
+	expectedVersion.ManifestDigest = acceptedVersion.ManifestDigest
+	expectedVersion.Metadata = acceptedVersion.Metadata
+	expectedVersion.RegistrationStatus = acceptedVersion.RegistrationStatus
+	expectedVersion.RegisteredAt = acceptedVersion.RegisteredAt
+	expectedVersion.UpdatedAt = acceptedVersion.UpdatedAt
+	if !reflect.DeepEqual(expectedVersion, acceptedVersion) {
+		return ErrBootstrapRejected
+	}
+	if currentCredential.TokenHash == "" || currentCredential.TokenHash != acceptedCredential.TokenHash || currentCredential.Binding != acceptedCredential.Binding || currentCredential.AcceptedAt != nil || currentCredential.Revoked {
+		return ErrBootstrapConflict
+	}
+	if acceptedCredential.AcceptedAt == nil || acceptedCredential.ReceiptUntil == nil || acceptedCredential.ReceiptID == "" || acceptedCredential.RegistrationKey == "" || !acceptedCredential.Revoked {
+		return ErrBootstrapRejected
+	}
+	expectedCredential := currentCredential
+	expectedCredential.RegistrationKey = acceptedCredential.RegistrationKey
+	expectedCredential.ReceiptID = acceptedCredential.ReceiptID
+	expectedCredential.AcceptedAt = acceptedCredential.AcceptedAt
+	expectedCredential.ReceiptUntil = acceptedCredential.ReceiptUntil
+	expectedCredential.Revoked = true
+	if !reflect.DeepEqual(expectedCredential, acceptedCredential) {
+		return ErrBootstrapRejected
+	}
+	if audit.ID == "" || audit.TenantSlug != acceptedVersion.TenantSlug || audit.PrincipalID != "worker-bootstrap" || audit.AuthenticationMethod != "kubernetes-tokenreview" || audit.Action != "worker.contract.register" || audit.Permission != "bootstrap:register-contract" || audit.AuthorizationResult != "allowed" || audit.TargetType != "workerVersion" || audit.TargetID != acceptedVersion.ID || audit.Outcome != "accepted" {
+		return errors.New("accepted bootstrap audit is required")
+	}
+	return nil
+}
+
+func (s *MemoryStore) CommitBootstrapAcceptance(tenantID string, version domain.WorkerVersion, credential domain.BootstrapCredential, audit domain.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	versionKey := tenantKey(tenantID, version.ID)
+	currentVersion, versionExists := s.versions[versionKey]
+	currentCredential, credentialExists := s.bootstrapCredentials[credential.TokenHash]
+	if !versionExists || !credentialExists {
+		return ErrBootstrapRejected
+	}
+	if err := validateBootstrapAcceptance(tenantID, currentVersion, version, currentCredential, credential, audit); err != nil {
+		return err
+	}
+	s.versions[versionKey] = version
+	s.bootstrapCredentials[credential.TokenHash] = credential
+	s.audits[tenantID] = append(s.audits[tenantID], audit)
+	return nil
+}
+
+func (s *FileStore) CommitBootstrapAcceptance(tenantID string, version domain.WorkerVersion, credential domain.BootstrapCredential, audit domain.AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mutate(func(next *fileState) error {
+		versionKey := tenantKey(tenantID, version.ID)
+		currentVersion, versionExists := next.WorkerVersions[versionKey]
+		currentCredential, credentialExists := next.BootstrapCredentials[credential.TokenHash]
+		if !versionExists || !credentialExists {
+			return ErrBootstrapRejected
+		}
+		if err := validateBootstrapAcceptance(tenantID, currentVersion, version, currentCredential, credential, audit); err != nil {
+			return err
+		}
+		next.WorkerVersions[versionKey] = version
+		next.BootstrapCredentials[credential.TokenHash] = credential
+		next.Audits[tenantID] = append(next.Audits[tenantID], audit)
+		return nil
+	})
 }
 
 func (r *BootstrapRegistry) rejectVersion(binding domain.BootstrapBinding) {
