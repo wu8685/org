@@ -32,6 +32,7 @@ Implemented and covered by tests:
 - durable Tenant + principal scoped WorkerVersion publish idempotency with canonical payload hashing, same-operation replay, payload-conflict rejection, Audit references and terminal reservation retention;
 - copy-on-write FileStore commits: persistence failure leaves both the process-visible snapshot and the on-disk snapshot unchanged across catalog, invocation, quota, action, publish, Audit and bootstrap records;
 - atomic bootstrap acceptance: the read-only Worker contract, exact-retry receipt and accepted Audit are committed together, so a failed durable write leaves the pending WorkerVersion safely retryable;
+- candidate-bound bootstrap workload identity: TokenReview Pod UID claims, live Pod UID/ServiceAccount, Tenant/Worker/version labels, an unpredictable rollout generation and the ReplicaSet→canonical Deployment owner chain must all match the credential binding before contract registration;
 - Go server-rendered Console with progressive JavaScript, approved calm console visual language, read-only generated contract display, responsive resource tables, runtime dependency-driven DAG layout, equivalent mobile structured node list and persistent delivery-unknown action feedback;
 - loopback-only local Console executable with server-configured development Tenant/principal identity; request headers cannot override Tenant.
 - real local Console acceptance across `kind-org` and host Temporal: Hello covers Worker/Workflow plus Current and historical pinned Run reads; parallel-confirmation submits and retries the authorized action through the HTTP Gateway then polls accepted outcome; dynamic-decision verifies both runtime branches expose the unselected node as `skipped` through the Console Run API.
@@ -51,5 +52,6 @@ Latest local verification on 2026-08-01:
 - Sample slimming acceptance passed after removing obsolete artifacts: centralized publish-contract validation, stale-path checks, all three copied modules, and all three real kind + Temporal paths remain green.
 - publish idempotency HTTP/service/FileStore tests, CSRF documentation path, Sample revision commands and parallel required input passed; all three real kind + Temporal acceptance paths remained green.
 - review-fixes Stage 1 fault injection passed for FileStore write failure, quota acquire/release/reconcile and bootstrap acceptance/restart exact retry; root and Sample race/vet/docs checks plus all three real kind + Temporal acceptance paths remained green.
+- review-fixes Stage 2 identity tests reject missing/mismatched TokenReview Pod UID claims, stale rollout generations, mismatched Tenant/Worker/version labels and broken owner UIDs; real `kind-org` bootstrap verified the projected token claim and live owner chain.
 
 The project does not claim exactly-once external effects. The safety contract requires downstream idempotency or an explicit reconciliation/compensation policy for ambiguous write outcomes.

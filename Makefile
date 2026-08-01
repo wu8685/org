@@ -28,6 +28,7 @@ console-test:
 
 docs-test:
 	@sh scripts/check-doc-terminology.sh
+	@sh scripts/check-doc-format.sh
 
 backend-test:
 	@go test ./...

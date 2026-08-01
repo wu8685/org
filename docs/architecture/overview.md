@@ -1,77 +1,112 @@
-# Architecture Overview
+# 架构概览
 
-org把“业务流程如何表达”和“版本如何安全运行、触发与观察”分开。用户主要面对Org SDK、Console/API和自己的Worker repository。
+本页面向已经跑通过 Hello、希望理解系统边界的读者。第一次使用请先读 [核心概念](../concepts.md) 和 [本地快速上手](../getting-started.md)。
 
-> 产品术语遵循 [org glossary](glossary.md)：Tenant是产品隔离边界，不映射为底层资源边界。
+## 一句话边界
+
+Worker 决定业务 Workflow 如何执行；org control plane 决定哪个版本可以运行、谁可以触发和操作、用户能看到什么；Temporal 和 Kubernetes 是底层执行基础设施。
+
+## 组件关系
 
 ```mermaid
 flowchart LR
-    User["User / CI"] -->|"push immutable image digest"| Registry["OCI registry or local kind image store"]
-    User -->|"publish Version / start Run / submit action"| CP["org control plane + Gateway"]
+    User["User / CI"] -->|"push immutable image"| Registry["OCI registry"]
+    User -->|"publish / start / action"| CP["org control plane + Gateway"]
     CP -->|"deploy candidate Worker"| K8s["Kubernetes"]
     K8s --> Worker["User Worker + Org SDK"]
-    Worker -->|"bootstrap contract registration"| CP
-    CP -->|"start, query, signal"| Temporal["Temporal"]
+    Worker -->|"register contract"| CP
+    CP -->|"start / query / signal"| Temporal["Temporal"]
     Worker <-->|"poll and execute"| Temporal
-    CP -->|"read model + semantic projection"| Console["Console / API"]
+    CP -->|"read model + projection"| Console["Console / API"]
 ```
 
-## 职责边界
+## 谁负责什么
 
 | 组件 | 负责 | 不负责 |
 |---|---|---|
-| 用户Worker repository | typed Definition、Activities、业务input/output、image build/push | Tenant选择、routing名称、平台credential |
-| Org SDK | deterministic Workflow adapter、Activity lifecycle、stable IDs、dynamic semantic projection、bootstrap contract registration | 执行控制面授权、部署Kubernetes资源 |
-| org control plane | Tenant授权、Worker/Version/Run、digest发布、配额、部署、promotion、read model与Audit | 构建或push用户image、执行业务DAG |
-| Gateway | Run/action授权、schema校验、Idempotency-Key和delivery状态 | 让浏览器直接发送底层Signal |
-| Worker | 轮询并执行用户Workflow/Activities | 决定自己属于哪个Tenant/Worker/Version |
-| Temporal | 持久执行、timer、retry、Signal与Worker versioning | 推断产品DAG或替org做Tenant授权 |
-| Kubernetes | 运行candidate Worker Pod并执行资源/security context | 在共享platform Kubernetes Namespace中按Tenant label提供原生硬配额 |
+| 用户 Worker repository | Definition、Activities、业务 input/output、image build/push | Tenant 选择、平台 routing、平台 credential |
+| Org SDK | Workflow adapter、stable node identity、contract registration、semantic projection | control-plane authorization、Kubernetes deployment |
+| org control plane | Tenant authorization、Worker/Version/Run、quota、deployment、promotion、read model、Audit | 构建 image、执行业务 DAG |
+| Gateway | Run/action authorization、schema validation、idempotency、delivery state | 让浏览器直连 Temporal |
+| Temporal | durable execution、history、retry、timer、Signal、Worker versioning | 推断业务 DAG、执行 Tenant authorization |
+| Kubernetes | 运行候选和 Ready Worker workload | 提供 org 产品模型或业务状态 |
 
-org当前使用一个shared platform Temporal Namespace和一个shared platform Kubernetes Namespace。Tenant隔离由control plane的认证、授权、命名、store和配额规则执行；共享基础设施不应被描述为硬隔离。
+## 发布路径
 
-## 动态 DAG 的可信来源
+用户发布的是不可变 image digest，不是源码或 manifest 文件：
 
-Workflow可以根据已记录的Activity result执行if/else、fan-out或join，因此节点数和依赖不一定在发布时全部确定。Org SDK在deterministic Workflow执行中维护semantic projection，逐节点报告：
+```text
+CI push image
+  → org 接收 digest-only publish request
+  → Kubernetes 启动 candidate Worker
+  → Org SDK 从 typed Definition 生成并注册 contract
+  → org 确认 Worker poller 可见
+  → pinned contract probe 通过
+  → Version Ready / Current
+```
+
+contract 由实际运行的 Org SDK 自动注册，并在 Console/API 中只读展示。用户不能上传另一份 contract 覆盖运行时声明。
+
+## Run 路径
+
+```text
+用户触发 Workflow
+  → control plane 解析 Current 或显式历史 Version
+  → Temporal 创建 execution
+  → Worker 执行 Workflow 与 Activities
+  → Org SDK 更新 semantic projection
+  → control plane 验证并保存 read model
+  → Console 展示 dynamic DAG
+```
+
+每次触发都创建独立 Run。历史 Version 可以继续服务 pinned 长运行 Workflow；显式选择历史 Version 不会改变 Current。
+
+## Dynamic DAG 的可信来源
+
+Workflow 可以根据已记录的 Activity result 执行 if/else、fan-out 或 join，节点不一定在发布时全部确定。
+
+Org SDK 在 deterministic Workflow execution 中维护 semantic projection，报告：
 
 ```text
 pending / waiting-for-user / running / completed / failed / skipped / cancelled
 ```
 
-Console的dynamic DAG renderer只消费这份validated semantic projection。它不会从Temporal Event History猜测业务节点，也不假定固定节点数或固定坐标。
+Console 只消费经过 control plane 验证的 projection。它不从 Temporal Event History 猜测业务节点，也不假定固定节点数或坐标。
 
-Workflow代码本身不能调用外部服务。外部I/O只能由Activity执行；Workflow依据Temporal已经记录的Activity result决定后续路径。
+## 人工 action 路径
 
-## 人工操作
-
-`AwaitConfirmation`或自定义`WaitForAction`是Workflow内可恢复的idle node，不是一个阻塞Activity。典型过程：
+`AwaitConfirmation` 或 `WaitForAction` 是 Workflow 内可恢复的等待点，不是阻塞 Activity：
 
 ```text
 projection = waiting-for-user
-  → Console按input schema展示action
-  → Gateway验证Tenant、permission、revision与Idempotency-Key
-  → Gateway发送受控action
-  → Org SDK恢复Workflow并更新projection
+  → Console 根据 input schema 展示 action
+  → Gateway 验证 Tenant、permission、revision、Idempotency-Key
+  → Gateway 发送受控 action
+  → Workflow 接受或拒绝
+  → projection 更新
 ```
 
-网络中断可能让action处于`delivery-unknown`；客户端应使用同一Idempotency-Key查询或安全重试，不能只修改浏览器状态。
+网络中断可能产生 `delivery-unknown`。客户端必须使用同一 `Idempotency-Key` 查询或安全重试，不能只修改浏览器状态假装 Workflow 已推进。
 
-## WorkerVersion promotion
+## Tenant 与共享基础设施
 
-用户发布不可变image digest后，Version先保持pending：
+产品隔离边界是 Tenant。当前底层使用：
 
-```text
-candidate deployed
-  → Org SDK auto-registration accepted
-  → Worker poller visible
-  → pinned contract probe verified
-  → Ready / Current
-```
+- 一个共享 platform Temporal Namespace。
+- 一个共享 platform Kubernetes Namespace。
 
-contract由运行中的Org SDK从typed Definition生成并自动注册。用户不能在Console上传或覆盖它。历史Version可以继续服务Pinned长运行Workflow；显式选择历史Version时，每次仍创建独立Run。
+Tenant isolation 由 control plane 的认证、授权、命名、store、quota 和 Audit 共同执行。共享基础设施不能被描述成 Kubernetes 或 Temporal 原生提供的硬多租户隔离。
+
+完整术语约束见 [org glossary](glossary.md)。
 
 ## 外部副作用
 
-Temporal提供可靠重试，但不承诺外部效果exactly once。write Activity必须传播stable idempotency key，或声明reconciliation/compensation policy。Worker在外部写成功、向Temporal确认前崩溃时，重试不能重复产生外部效果。
+Workflow 代码不能直接访问外部服务，外部 I/O 只能由 Activity 执行。
 
-详细protocol、失败状态和验收规则见 [`docs/specs/`](../specs/)；本页只描述用户需要理解的系统边界。
+Temporal 提供可靠 retry，但不承诺外部效果 exactly once。Worker 在外部写成功、向 Temporal 确认前崩溃时，Activity 可能重试。因此 write Activity 必须传播 stable idempotency key，或提供 reconciliation/compensation policy。
+
+## 继续深入
+
+- [发布 WorkerVersion](../api/publish-worker-version.md)：publish request 和状态检查。
+- [本地开发与 E2E](../development.md)：维护 control plane 和真实验收。
+- [`docs/specs/`](../specs/)：设计、amendment 和实现验收依据；不属于新手阅读路径。

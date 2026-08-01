@@ -178,8 +178,10 @@ func TestRootSampleTargetsOnlyDelegateToSampleMakefiles(t *testing.T) {
 func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	root := filepath.Join("..", "..")
 	files := map[string][]string{
-		"README.md":                          {"Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/getting-started.md", "docs/architecture/overview.md", "samples/README.md"},
-		"docs/getting-started.md":            {"kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "api/publish-worker-version.md"},
+		"README.md":                          {"Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/README.md", "docs/getting-started.md", "docs/concepts.md", "samples/README.md"},
+		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "architecture/overview.md", "development.md", "specs/"},
+		"docs/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
+		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "api/publish-worker-version.md"},
 		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "source"},
 		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
 		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},

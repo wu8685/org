@@ -4,6 +4,10 @@
 
 > Approved amendment: `004-worker-identity-and-description.md` removes public `scope` in favor of authenticated Tenant + Worker name and adds per-WorkerVersion description.
 
+## Status
+
+**Historical MVP baseline — amended by later approved specifications.**
+
 ## Goal
 
 `org` is a Go control plane with a browser-based operations console. It accepts a published, immutable Worker image and its metadata, deploys it to Kubernetes, and exposes both service APIs and a UI for invoking and operating that Worker's Temporal Workflows.

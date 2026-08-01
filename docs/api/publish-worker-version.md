@@ -1,19 +1,44 @@
-# Publish a WorkerVersion
+# 发布 WorkerVersion
 
-Publishing connects an immutable Worker image to an existing logical Worker. The candidate starts, its Org SDK registers the read-only Workflow contract automatically, and org promotes the Version only after deployment, registration, polling and probe checks pass.
+本页说明如何把已经构建完成的 Worker image 发布成 org Version。第一次体验建议使用 Console；需要 CI 或自动化集成时，再使用这里的 HTTP API。
 
-> Product terminology follows the canonical [org glossary](../architecture/glossary.md). Tenant comes from the authenticated principal; it is never accepted from this request.
+## 发布前需要准备什么
 
-## Request
+- 已存在的逻辑 Worker，例如 `hello-worker`。
+- registry 或 Sample `make kind-load` 返回的 immutable `IMAGE_DIGEST`。
+- Version label 和 description。
+- Pod CPU/memory、Secret reference 等 runtime 配置。
+- repository、branch、commit 和 CI reference 等 source provenance。
 
-先在保持同一authenticated session（相同cookie或Authorization）的情况下读取CSRF token：
+org does not build or push image。它从 immutable `registry/repository@sha256:<64 lowercase hex>` 开始接手。
+
+## 发布后会发生什么
+
+```text
+submit publish request
+  → candidate deployment
+  → SDK automatic registration
+  → Worker polling
+  → pinned contract probe
+  → Ready / Current
+```
+
+API 返回 operation，调用方轮询 operation 状态。Version 在全部检查完成前保持 pending。
+
+## 第 1 步：读取 session 和 CSRF token
+
+保持同一个 authenticated session（相同 cookie 或 Authorization），读取 session：
 
 ```http
 GET /api/v1/session
 Accept: application/json
 ```
 
-从响应的`session.csrfToken`取得值。随后使用同一authenticated session发布：
+从响应的 `session.csrfToken` 取得 CSRF token。
+
+## 第 2 步：提交发布请求
+
+使用同一个 authenticated session：
 
 ```http
 POST /api/v1/workers/{workerName}/versions
@@ -22,39 +47,49 @@ Idempotency-Key: publish-2026-08-1
 Content-Type: application/json
 ```
 
-Use [`examples/publish-worker-version.json`](examples/publish-worker-version.json) as the body shape. Replace its image with the exact `IMAGE_DIGEST` returned by your registry push or Sample `make kind-load` command.
+请求体结构见 [`examples/publish-worker-version.json`](examples/publish-worker-version.json)。将其中的 image 替换为准确 `IMAGE_DIGEST`。
 
-| Field | Meaning |
-|---|---|
-| `version` | Stable public Version label |
-| `description` | Human-readable explanation of this Version |
-| `image` | Immutable `registry/repository@sha256:<64 lowercase hex>` |
-| `versionConfig` | Business configuration for this Version; never platform routing |
-| `runtime` | Pod CPU/memory and Secret references |
-| `source` | Repository, branch, commit and CI provenance |
+| 字段 | 含义 | 不应包含什么 |
+|---|---|---|
+| `version` | 稳定的公开 Version label | 可变部署状态 |
+| `description` | 供人阅读的版本说明 | Secret 或 credential |
+| `image` | immutable OCI digest | tag、`tag@digest`、源码地址 |
+| `versionConfig` | Version 的业务配置 | 平台 routing |
+| `runtime` | Pod CPU/memory 和 Secret reference | Secret value |
+| `source` | repository、branch、commit、CI provenance | 用于运行时认证的 credential |
 
-The Worker name comes from the URL. Tenant comes from authentication. Do not send Tenant identity, Worker name, `scope`, platform routing, credentials, contract, metadata or projection fields in the body.
+Worker name 来自 URL，Tenant 来自认证主体。请求体不得自行发送 Tenant identity、Worker name、`scope`、平台 routing、credential、contract、metadata 或 projection 字段。
 
-Mutable tags and `tag@digest` are rejected. org does not build or push the image for you.
+## Idempotency-Key
 
-`Idempotency-Key`必须是1–200个visible ASCII字符（`!`–`~`，不含空格）。相同Tenant、principal、key与canonical payload返回同一operation；同一scope下复用key但改变payload返回`409 conflict`。JSON object字段顺序和无意义空白不改变canonical payload。terminal reservation默认保留24小时；不要把credential或敏感业务值放进key。
+`Idempotency-Key` 必须包含 1–200 个 visible ASCII 字符（`!`–`~`，不含空格）。
 
-## Response and verification
+- 相同 Tenant、principal、key 和 canonical payload：返回同一 operation。
+- 同一 scope 下复用 key，但改变 payload：返回 `409 conflict`。
+- JSON object 字段顺序和无意义空白：不改变 canonical payload。
+- terminal reservation：默认保留 24 小时。
 
-The API returns `202 Accepted` with a pollable operation URL. The Version remains pending while org verifies:
+不要把 credential 或敏感业务值放进 key。
 
-```text
-candidate deployment
-→ SDK automatic registration
-→ Worker polling
-→ pinned contract probe
-→ Ready / Current
-```
+## 第 3 步：检查响应
 
-The registered contract is read-only in Console/API. Fix an invalid image or contract by publishing a new Version; do not try to overwrite an existing Version.
+API 返回 `202 Accepted` 和可轮询的 operation URL。成功条件不是“HTTP request 已接受”，而是发布流水线最终进入 Ready / Current。
 
-## Secrets and external effects
+注册后的 contract 在 Console/API 中只读。如果 image 或 contract 无效，应修复后发布新的 Version，不要覆盖已有 Version。
 
-`runtime.environment` contains Secret references, not Secret values. Do not place credentials or sensitive input in Version configuration, Workflow history, projection, logs or Audit.
+## 常见失败
 
-Workflow code must not perform external I/O. A write Activity must propagate a stable idempotency key or declare reconciliation/compensation behavior; retries do not guarantee external effects exactly once.
+| 失败 | 含义 | 处理方式 |
+|---|---|---|
+| image reference 被拒绝 | 不是允许 registry 下的完整 digest，或使用了 tag | 使用 push/`kind-load` 返回的准确 `IMAGE_DIGEST` |
+| registration rejected | 运行中的 SDK contract、image、protocol 或 workload identity 不满足发布约束 | 修复 Worker 后发布新 Version |
+| poller/probe 未通过 | candidate 已启动，但尚不能证明目标 Workflow 可由该 Version 正确服务 | 查看 operation、candidate Pod 和高级诊断信息 |
+| idempotency conflict | 同一 key 被用于不同 payload | 为新的发布意图使用新 key |
+
+## Secret 与外部副作用
+
+`runtime.environment` 包含 Secret reference，不包含 Secret value。不要把 credential 或敏感 input 放入 Version configuration、Workflow history、projection、log 或 Audit。
+
+Workflow 代码不得执行外部 I/O。write Activity 必须传播稳定的 idempotency key，或声明 reconciliation/compensation 行为；retry 不保证外部效果 exactly once。
+
+> 产品术语遵循 [org glossary](../architecture/glossary.md)。Tenant 来自 authenticated principal，发布请求不能指定另一个 Tenant。

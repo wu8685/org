@@ -1,6 +1,6 @@
 # Hello Org SDK Worker
 
-这是最小的Org SDK Worker repository。它用两个无外部副作用的Activity生成问候语，并把顺序执行路径投影给org：
+这是最小的 Org SDK Worker repository。它用两个无外部副作用的 Activity 生成问候语，并把顺序执行路径投影给 org：
 
 ```text
 prepare-greeting → compose-greeting → completed
@@ -8,12 +8,21 @@ prepare-greeting → compose-greeting → completed
 
 > 产品术语遵循 [org glossary](https://github.com/wu8685/org/blob/main/docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
 
+## 这个 Sample 教什么
+
+完成后，你应该能说明：
+
+- Definition 如何声明 Workflow 和 Activity。
+- 两个 Activity 如何按依赖顺序执行。
+- Org SDK 如何把执行过程投影成三个业务节点。
+- 一个独立 Worker repository 如何测试、构建并输出 immutable digest。
+
 ## 先看两处
 
-- `definition.go`：typed Definition、节点依赖与retry/timeout policy；
+- `definition.go`：typed Definition、节点依赖与 retry/timeout policy；
 - `activities.go`：业务输入校验和问候语生成。
 
-Sample不import raw Temporal SDK，不手写projection或平台routing。Org SDK负责stable node/Activity ID、dynamic semantic projection和启动时contract registration。
+Sample 不 import raw Temporal SDK，不手写 projection 或平台 routing。Org SDK 负责 stable node/Activity ID、dynamic semantic projection 和启动时 contract registration。
 
 ## 测试
 
@@ -26,25 +35,25 @@ make vet
 make verify
 ```
 
-预期结果：输入`{"name":"Codex"}`后返回`Hello, Codex!`，projection中的三个节点均为`completed`。
+预期结果：输入 `{"name":"Codex"}` 后返回 `Hello, Codex!`，projection 中的三个节点均为 `completed`。
 
-## 构建本地image
+## 构建本地 image
 
 ```sh
-SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
 make image \
   VERSION=2026.08.1 \
   COMMIT="$SOURCE_REVISION"
 ```
 
-Docker build context只有当前repository。命令输出可读tag；发布WorkerVersion仍必须使用immutable digest。
+Docker build context 只有当前 repository。命令输出可读 tag；发布 WorkerVersion 仍必须使用 immutable digest。
 
-## Push到registry
+## Push 到 registry
 
-先用Docker完成registry login，再运行：
+先用 Docker 完成 registry login，再运行：
 
 ```sh
-SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
 make push \
   IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
   VERSION=2026.08.1 \
@@ -57,35 +66,35 @@ make push \
 IMAGE_DIGEST=registry.example.com/team/hello-worker@sha256:<digest>
 ```
 
-脚本不保存registry credential。不要从tag文本推测digest，始终使用registry返回值。
+脚本不保存 registry credential。不要从 tag 文本推测 digest，始终使用 registry 返回值。
 
-## 本地kind
+## 加载到本地 kind
 
-已有`kind-org`时：
+已有 `kind-org` 时：
 
 ```sh
-SOURCE_REVISION=abcdef1 # 替换为你的7–64位hexadecimal source revision
+SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
 make kind-load \
   VERSION=2026.08.1 \
   COMMIT="$SOURCE_REVISION"
 ```
 
-它会构建、加载image并输出`IMAGE_DIGEST=org.local/hello-worker@sha256:...`。
+它会构建、加载 image 并输出 `IMAGE_DIGEST=org.local/hello-worker@sha256:...`。
 
-## 在org中运行
+## 在 org 中运行
 
-1. 在Console创建Worker `hello-worker`；
-2. 新建Version，填写version-level description、`IMAGE_DIGEST`、`100m` CPU、`128Mi` memory和source provenance；
-3. 等待候选Worker完成SDK registration、poller与probe；
-4. 触发`HelloWorkflow`，input为`{"name":"Codex"}`；
-5. 在Run detail观察顺序DAG与最终结果。
+1. 在 Console 创建 Worker `hello-worker`。
+2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU、`128Mi` memory 和 source provenance。
+3. 等待候选 Worker 完成 SDK registration、poller 与 probe。
+4. 触发 `HelloWorkflow`，input 为 `{"name":"Codex"}`。
+5. 在 Run detail 观察顺序 DAG 与最终结果。
 
-Org SDK在Worker启动时从typed Definition生成contract并自动注册。用户不管理contract artifact，Console只读展示注册结果。
+Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册。用户不管理 contract artifact，Console 只读展示注册结果。
 
 ## 发布输入与平台配置
 
-部署时org平台注入执行连接、候选Pod identity和一次性注册材料。它们不是用户填写的`.env`配置，也不得打进image或提交到Git。
+部署时 org 平台注入执行连接、候选 Pod identity 和一次性注册材料。它们不是用户填写的 `.env` 配置，也不得打进 image 或提交到 Git。
 
-用户只维护业务Definition/Activities和image。Version description、resources、Secret reference与source provenance通过org发布接口提交；完整字段说明见 [Publish a WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
+用户只维护业务 Definition/Activities 和 image。Version description、resources、Secret reference 与 source provenance 通过 org 发布接口提交；完整字段说明见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
 
-真实write Activity必须使用stable idempotency key，或声明reconciliation/compensation policy；平台不声称外部效果exactly once。
+真实 write Activity 必须使用 stable idempotency key，或声明 reconciliation/compensation policy；平台不声称外部效果 exactly once。

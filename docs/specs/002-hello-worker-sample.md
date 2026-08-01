@@ -4,9 +4,11 @@
 
 > Approved amendment: `004-worker-identity-and-description.md` removes scope and duplicate Worker name from sample registration metadata.
 
-## Status and simplification decision
+## Status
 
-Approved for implementation on 2026-08-01. This specification replaces the earlier order-fulfillment sample.
+**Approved — implementation authorized on 2026-08-01.**
+
+This specification replaces the earlier order-fulfillment sample.
 
 The order sample mixed the integration contract with inventory vocabulary, an HTTP downstream, a fixture server, secrets, and retry-failure plumbing. Those details obscured the user path that the sample is meant to teach. External-effect crash safety remains covered by `org` safety and E2E infrastructure where needed; it is not a reason to burden user-owned Worker code.
 
@@ -27,7 +29,6 @@ The sample does not import `org` internal packages. Temporal implementation deta
 | Field | Value |
 |---|---|
 | sample directory | `samples/hello` |
-| Worker name | `hello-worker` |
 | Worker name | `hello-worker` |
 | Workflow type | `HelloWorkflow` |
 | Activity types | `PrepareGreeting`, then `ComposeGreeting` |

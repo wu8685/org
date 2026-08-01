@@ -21,6 +21,8 @@ docs/ui-sdd-input.md
 docs/development.md
 docs/implementation-status.md
 README.md
+docs/README.md
+docs/concepts.md
 docs/getting-started.md
 docs/architecture/overview.md
 docs/api/publish-worker-version.md
