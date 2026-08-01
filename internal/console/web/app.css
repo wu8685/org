@@ -83,6 +83,8 @@ tr:last-child td { border-bottom: 0; }
 .status-running, .status-waiting-for-user { color: var(--accent); background: #ddf4ff; }
 .status-failed, .status-timed-out, .status-canceled { color: var(--danger); background: #ffebe9; }
 .status-pending, .status-skipped { color: var(--muted); background: #f1f1f1; }
+.run-status-summary { display: grid; justify-items: start; gap: 6px; min-width: 140px; }
+.run-block-reason { max-width: 32ch; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .notice { margin-bottom: 18px; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: var(--radius-sm); background: #fff8c5; }
 .empty { padding: 52px 24px; text-align: center; color: var(--muted); }
 .definition { display: grid; grid-template-columns: minmax(130px, .4fr) 1fr; gap: 10px 20px; margin: 0; }

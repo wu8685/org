@@ -172,6 +172,8 @@ prepare-greeting → compose-greeting → completed
 
 三个节点最终都应为 `completed`，结果中包含 `Hello, Codex!` 和实际使用的 Worker Version。
 
+返回 Runs tab 后，无需再次进入详情也能看到最新 semantic status。列表以文字显示 `Running`、`Waiting for user`、`Completed`、`Failed` 或 `Cancelled`，同时显示安全的 Current node 摘要与更新时间。等待人工操作时只显示固定 block reason；列表不会展示 action payload、Workflow input、Activity error 或 Secret。状态来自 Worker 的 semantic projection，而不是从底层 execution history 猜测。
+
 到这里，第一次完整体验已经完成。
 
 ## 第 7 步：清理

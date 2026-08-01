@@ -846,6 +846,33 @@ func TestGetInvocationUsesDeclaredProjectionQueryAndBuildsDiagnosticsLink(t *tes
 	}
 }
 
+func TestGetInvocationDoesNotRewriteAnAlreadyTerminalRunTimestamp(t *testing.T) {
+	executor := &fakeExecutor{
+		describeResult: ExecutionState{Status: "completed"},
+		queryResult:    []byte(`{"steps":[{"id":"charge","label":"Charge","status":"completed"}],"currentStep":"","status":"completed","allowedActions":[]}`),
+	}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, &fakeCluster{}, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.GetInvocation(context.Background(), auth, invocation.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := cp.store.Invocation(auth.TenantID, invocation.ID)
+	time.Sleep(time.Millisecond)
+	if _, err := cp.GetInvocation(context.Background(), auth, invocation.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := cp.store.Invocation(auth.TenantID, invocation.ID)
+	if !second.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("terminal read rewrote durable UpdatedAt: first=%s second=%s", first.UpdatedAt, second.UpdatedAt)
+	}
+}
+
 func TestGetInvocationReturnsValidatedOrgSDKDynamicProjection(t *testing.T) {
 	definition := dynamicServiceDefinition()
 	graph, err := orgsdk.NewGraph(definition, "DynamicWorkflow", "v1", time.Unix(1, 0).UTC())

@@ -923,7 +923,7 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 	if err != nil {
 		return InvocationView{}, err
 	}
-	if terminal, ok := terminalInvocationState(state.Status); ok {
+	if terminal, ok := terminalInvocationState(state.Status); ok && !isTerminalInvocationState(inv.State) {
 		inv.State, inv.UpdatedAt = terminal, time.Now().UTC()
 		if terminal == domain.InvocationFailed {
 			inv.Failure = state.Status
@@ -959,6 +959,15 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 	}
 	result = view
 	return view, nil
+}
+
+func isTerminalInvocationState(state domain.InvocationState) bool {
+	switch state {
+	case domain.InvocationCompleted, domain.InvocationFailed, domain.InvocationCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 var runtimeNodeHashPattern = regexp.MustCompile(`^[a-z2-7]{16}$`)

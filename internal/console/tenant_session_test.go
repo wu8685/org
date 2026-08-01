@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
@@ -37,6 +38,26 @@ type tenantRoutingControlPlane struct {
 	*stubControlPlane
 	mu       sync.Mutex
 	lastAuth map[string]service.AuthenticatedContext
+}
+
+type tenantRunRoutingControlPlane struct {
+	*stubControlPlane
+	mu       sync.Mutex
+	lastAuth service.AuthenticatedContext
+}
+
+func (c *tenantRunRoutingControlPlane) ListInvocations(_ context.Context, auth service.AuthenticatedContext, _ service.InvocationFilter) ([]domain.Invocation, error) {
+	c.mu.Lock()
+	c.lastAuth = auth
+	c.mu.Unlock()
+	return []domain.Invocation{{ID: "shared-run", TenantID: auth.TenantID, TenantSlug: auth.TenantSlug, WorkerName: "same-worker", Workflow: "SameWorkflow", SelectedVersion: "v1", Description: "description-for-" + auth.TenantSlug, State: domain.InvocationRunning, UpdatedAt: time.Now().UTC()}}, nil
+}
+
+func (c *tenantRunRoutingControlPlane) GetInvocation(_ context.Context, auth service.AuthenticatedContext, runID string) (service.InvocationView, error) {
+	invocation := domain.Invocation{ID: runID, TenantID: auth.TenantID, TenantSlug: auth.TenantSlug, State: domain.InvocationRunning, UpdatedAt: time.Now().UTC()}
+	nodeID := "current-aaaaaaaaaaaaaaaa"
+	projection := &orgsdk.Projection{Revision: 1, Status: "running", CurrentNodeIDs: []string{nodeID}, Nodes: []orgsdk.NodeProjection{{RuntimeNodeID: nodeID, Label: "Current node for " + auth.TenantSlug, Status: orgsdk.NodeStatusRunning}}}
+	return service.InvocationView{Invocation: invocation, Execution: service.ExecutionState{Status: "running"}, SemanticProjection: projection}, nil
 }
 
 func (c *tenantRoutingControlPlane) ListWorkers(_ context.Context, auth service.AuthenticatedContext) ([]domain.Worker, error) {
@@ -191,6 +212,37 @@ func TestTenantSwitchRequestStillRequiresCSRF(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/session/tenant", strings.NewReader(`{"tenantSlug":"alpha"}`)))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunListSemanticStatusFollowsSelectedTenantWithoutCrossTalk(t *testing.T) {
+	store := &memoryTenantSelectionStore{selected: map[string]string{}}
+	memberships := []TenantMembership{
+		{TenantID: "tenant-a", TenantSlug: "alpha", DisplayName: "Alpha", Permissions: map[string]bool{service.PermissionRunRead: true}},
+		{TenantID: "tenant-b", TenantSlug: "beta", DisplayName: "Beta", Permissions: map[string]bool{service.PermissionRunRead: true}},
+	}
+	authenticator, err := NewSessionAuthenticator(SessionAuthenticatorConfig{
+		PrincipalID: "user-a", SessionKey: "session-a", AuthenticationMethod: "test", CSRFToken: "csrf-a",
+		DefaultTenantID: "tenant-a", Memberships: memberships, SelectionStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &tenantRunRoutingControlPlane{stubControlPlane: &stubControlPlane{}}
+	handler := New(Config{Authenticator: authenticator, ControlPlane: backend})
+
+	alpha := httptest.NewRecorder()
+	handler.ServeHTTP(alpha, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))
+	if alpha.Code != http.StatusOK || !strings.Contains(alpha.Body.String(), "description-for-alpha") || !strings.Contains(alpha.Body.String(), "Current node for alpha") {
+		t.Fatalf("alpha status=%d body=%s", alpha.Code, alpha.Body.String())
+	}
+	switchRequest := httptest.NewRequest(http.MethodPost, "/api/v1/session/tenant", strings.NewReader(`{"tenantSlug":"beta"}`))
+	switchRequest.Header.Set("X-CSRF-Token", "csrf-a")
+	handler.ServeHTTP(httptest.NewRecorder(), switchRequest)
+	beta := httptest.NewRecorder()
+	handler.ServeHTTP(beta, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))
+	if beta.Code != http.StatusOK || !strings.Contains(beta.Body.String(), "description-for-beta") || !strings.Contains(beta.Body.String(), "Current node for beta") || strings.Contains(beta.Body.String(), "alpha") || backend.lastAuth.TenantID != "tenant-b" {
+		t.Fatalf("beta auth=%#v status=%d body=%s", backend.lastAuth, beta.Code, beta.Body.String())
 	}
 }
 

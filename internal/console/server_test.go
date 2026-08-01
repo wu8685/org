@@ -25,28 +25,29 @@ func (a stubAuthenticator) Authenticate(*http.Request) (Identity, error) {
 }
 
 type stubControlPlane struct {
-	created        []service.CreateWorkerRequest
-	workers        []domain.Worker
-	workerView     service.WorkerView
-	versions       []domain.WorkerVersion
-	version        domain.WorkerVersion
-	workflows      []service.WorkflowCatalogItem
-	runs           []domain.Invocation
-	invocationView service.InvocationView
-	actions        []domain.ActionOperation
-	overview       service.Overview
-	published      chan domain.WorkerVersionRequest
-	updatedVersion domain.WorkerVersion
-	startedRun     domain.Invocation
-	startRequest   service.StartRequest
-	cancelledRun   string
-	actionRequest  service.RunActionRequest
-	actionResult   domain.ActionOperation
-	actionErr      error
-	err            error
-	publishMu      sync.Mutex
-	publishByScope map[string]domain.PublishOperation
-	publishByID    map[string]domain.PublishOperation
+	created         []service.CreateWorkerRequest
+	workers         []domain.Worker
+	workerView      service.WorkerView
+	versions        []domain.WorkerVersion
+	version         domain.WorkerVersion
+	workflows       []service.WorkflowCatalogItem
+	runs            []domain.Invocation
+	invocationView  service.InvocationView
+	invocationViews map[string]service.InvocationView
+	actions         []domain.ActionOperation
+	overview        service.Overview
+	published       chan domain.WorkerVersionRequest
+	updatedVersion  domain.WorkerVersion
+	startedRun      domain.Invocation
+	startRequest    service.StartRequest
+	cancelledRun    string
+	actionRequest   service.RunActionRequest
+	actionResult    domain.ActionOperation
+	actionErr       error
+	err             error
+	publishMu       sync.Mutex
+	publishByScope  map[string]domain.PublishOperation
+	publishByID     map[string]domain.PublishOperation
 }
 
 func (c *stubControlPlane) CreateWorker(_ context.Context, _ service.AuthenticatedContext, request service.CreateWorkerRequest) (domain.Worker, error) {
@@ -75,7 +76,13 @@ func (c *stubControlPlane) ListWorkflowCatalog(context.Context, service.Authenti
 func (c *stubControlPlane) ListInvocations(context.Context, service.AuthenticatedContext, service.InvocationFilter) ([]domain.Invocation, error) {
 	return c.runs, c.err
 }
-func (c *stubControlPlane) GetInvocation(context.Context, service.AuthenticatedContext, string) (service.InvocationView, error) {
+
+func (c *stubControlPlane) GetInvocation(_ context.Context, _ service.AuthenticatedContext, runID string) (service.InvocationView, error) {
+	if c.invocationViews != nil {
+		if view, ok := c.invocationViews[runID]; ok {
+			return view, c.err
+		}
+	}
 	return c.invocationView, c.err
 }
 func (c *stubControlPlane) ListRunActions(context.Context, service.AuthenticatedContext, string) ([]domain.ActionOperation, error) {

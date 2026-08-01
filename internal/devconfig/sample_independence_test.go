@@ -217,9 +217,15 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		}
 	}
 	status := read(t, filepath.Join(root, "docs", "implementation-status.md"))
-	for _, want := range []string{"Tenant selector", "authorized memberships", "durable session selection"} {
+	for _, want := range []string{"Tenant selector", "authorized memberships", "durable session selection", "Runs list", "waiting-for-user", "Tenant-bound ETag"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("docs/implementation-status.md missing Tenant Console milestone %q", want)
+		}
+	}
+	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
+	for _, want := range []string{"Runs tab", "Waiting for user", "Current node", "action payload"} {
+		if !strings.Contains(gettingStarted, want) {
+			t.Errorf("docs/getting-started.md missing Run-list status guidance %q", want)
 		}
 	}
 	for relative, wants := range files {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
+	"github.com/wu8685/org/sdk/orgsdk"
 )
 
 const maxJSONBodyBytes = 1 << 20
@@ -626,13 +627,88 @@ func (s *server) listRuns(response http.ResponseWriter, request *http.Request, r
 				projectionStatus = view.SemanticProjection.Status
 			}
 		}
-		if statusFilter != "" && statusFilter != executionStatus && statusFilter != projectionStatus {
+		semanticStatus, currentNodes, blockReason, updatedAt, revision := runListSemanticSummary(invocation, view, viewErr)
+		if statusFilter != "" && statusFilter != semanticStatus && statusFilter != executionStatus && statusFilter != projectionStatus {
 			continue
 		}
-		item["executionStatus"], item["projectionStatus"] = executionStatus, projectionStatus
+		labels := make([]string, 0, len(currentNodes))
+		for _, node := range currentNodes {
+			labels = append(labels, node["label"])
+		}
+		item["executionStatus"], item["projectionStatus"], item["semanticStatus"] = executionStatus, projectionStatus, semanticStatus
+		item["projectionRevision"], item["currentNodes"], item["currentNodeSummary"] = revision, currentNodes, strings.Join(labels, ", ")
+		item["blockReason"], item["semanticUpdatedAt"] = blockReason, updatedAt
 		publicItems = append(publicItems, item)
 	}
+	encoded, err := json.Marshal(publicItems)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	digest := sha256.Sum256(append([]byte(identity.Auth.TenantID+"\x00"), encoded...))
+	etag := `"runs-` + hex.EncodeToString(digest[:]) + `"`
+	response.Header().Set("Cache-Control", "private, no-cache")
+	response.Header().Add("Vary", "Cookie")
+	if conditionalNotModified(response, request, etag) {
+		return
+	}
 	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "items": publicItems})
+}
+
+func runListSemanticSummary(invocation domain.Invocation, view service.InvocationView, viewErr error) (string, []map[string]string, string, time.Time, uint64) {
+	updatedAt := invocation.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = invocation.CreatedAt
+	}
+	semanticStatus := string(invocation.State)
+	if semanticStatus == "" {
+		semanticStatus = "unavailable"
+	}
+	if viewErr != nil || view.SemanticProjection == nil {
+		return semanticStatus, []map[string]string{}, "", updatedAt, 0
+	}
+	projection := view.SemanticProjection
+	semanticStatus = projection.Status
+	nodesByID := make(map[string]orgsdk.NodeProjection, len(projection.Nodes))
+	for _, node := range projection.Nodes {
+		nodesByID[node.RuntimeNodeID] = node
+	}
+	currentNodes := make([]map[string]string, 0, len(projection.CurrentNodeIDs))
+	waiting := false
+	for _, nodeID := range projection.CurrentNodeIDs {
+		node, ok := nodesByID[nodeID]
+		if !ok {
+			continue
+		}
+		currentNodes = append(currentNodes, map[string]string{"label": node.Label, "status": string(node.Status)})
+		if node.Status == orgsdk.NodeStatusWaitingForUser {
+			waiting = true
+		}
+	}
+	blockReason := ""
+	if waiting {
+		semanticStatus = string(orgsdk.NodeStatusWaitingForUser)
+		blockReason = "Waiting for an authorized user action"
+	}
+	if terminal := terminalRunStatus(invocation.State, view.Execution.Status); terminal != "" {
+		semanticStatus, blockReason = terminal, ""
+	}
+	return semanticStatus, currentNodes, blockReason, updatedAt, projection.Revision
+}
+
+func terminalRunStatus(state domain.InvocationState, executionStatus string) string {
+	switch state {
+	case domain.InvocationCompleted, domain.InvocationFailed, domain.InvocationCanceled:
+		return string(state)
+	}
+	switch executionStatus {
+	case "completed", "failed", "canceled":
+		return executionStatus
+	case "cancelled":
+		return "canceled"
+	default:
+		return ""
+	}
 }
 
 func (s *server) runDetail(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, runID string) {

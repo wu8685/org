@@ -11,8 +11,10 @@
   const yamlRenderer = payloadCodec;
   const segments = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   let lastRunETag = "";
+	let lastRunsETag = "";
   let actionContext = null;
   let runPoll = 0;
+	let runsPoll = 0;
 
   const tenantSwitch = document.querySelector("[data-tenant-switch]");
   const tenantSwitchStatus = document.querySelector("[data-tenant-switch-status]");
@@ -72,7 +74,7 @@
     notice.hidden = !message;
     if (message && !persistent) setTimeout(() => { if (notice.textContent === message) notice.hidden = true; }, 5000);
   };
-  const status = value => el("span", {class: `status status-${String(value || "pending").toLowerCase()}`, text: value || "unknown"});
+  const status = (value, appearance = value) => el("span", {class: `status status-${String(appearance || "pending").toLowerCase()}`, text: value || "unknown"});
   const mono = value => el("span", {class: "mono", text: value});
   const card = children => el("article", {class: "card"}, children);
   const metric = (label, value, note) => card([
@@ -309,13 +311,34 @@
     content.append(section("Read-only input contract", inputContract));
   }
 
-  async function renderRuns() {
-    const {items} = await api("/api/v1/runs" + location.search);
+	const runStatusLabels = {running: "Running", "waiting-for-user": "Waiting for user", completed: "Completed", failed: "Failed", canceled: "Cancelled", cancelled: "Cancelled", starting: "Starting", unavailable: "Unavailable"};
+	function runStatusSummary(run) {
+		const semanticStatus = run.semanticStatus || "unavailable";
+		const label = runStatusLabels[semanticStatus] || semanticStatus;
+		const wrapper = el("div", {class: "run-status-summary"});
+		const badge = status(label, semanticStatus);
+		const aria = [`Run status: ${label}`];
+		wrapper.append(badge);
+		if (run.blockReason) {
+			wrapper.append(el("span", {class: "run-block-reason", text: run.blockReason}));
+			aria.push(run.blockReason);
+		}
+		wrapper.setAttribute("aria-label", aria.join(". "));
+		return wrapper;
+	}
+
+  async function renderRuns(poll = false) {
+		const headers = poll && lastRunsETag ? {"If-None-Match": lastRunsETag} : {};
+		const response = await api("/api/v1/runs" + location.search, {headers});
+		if (response.notModified) return;
+		lastRunsETag = response.etag || "";
+		const {items} = response;
     clear(content);
     if (!items.length) return content.append(empty("当前 Tenant 的筛选条件下没有 Run。"));
-    content.append(table(["Run", "Description", "Worker", "Workflow", "Selected version", "Created"], items.map(run => [
-      link(run.id, `/runs/${encodeURIComponent(run.id)}`), run.description || "—", run.workerName, run.workflow, mono(run.selectedVersion), new Date(run.createdAt).toLocaleString(),
+		content.append(table(["Run", "Status", "Current node", "Updated", "Description", "Worker", "Workflow", "Selected version"], items.map(run => [
+			link(run.id, `/runs/${encodeURIComponent(run.id)}`), runStatusSummary(run), run.currentNodeSummary || "—", new Date(run.semanticUpdatedAt || run.updatedAt || run.createdAt).toLocaleString(), run.description || "—", run.workerName, run.workflow, mono(run.selectedVersion),
     ])));
+		if (!runsPoll) runsPoll = window.setInterval(() => { if (!document.hidden) renderRuns(true).catch(handleError); }, 3000);
   }
 
   async function renderRun(poll = false) {
@@ -551,8 +574,12 @@
 
   document.querySelectorAll("[data-dialog-close]").forEach(close => close.addEventListener("click", () => close.closest("dialog").close()));
   document.querySelector("[data-refresh]").addEventListener("click", () => load().catch(handleError));
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && page === "run") renderRun(true).catch(handleError); });
-  window.addEventListener("beforeunload", () => window.clearInterval(runPoll));
+  document.addEventListener("visibilitychange", () => {
+		if (document.hidden) return;
+		if (page === "run") renderRun(true).catch(handleError);
+		if (page === "runs") renderRuns(true).catch(handleError);
+	});
+  window.addEventListener("beforeunload", () => { window.clearInterval(runPoll); window.clearInterval(runsPoll); });
 
   function handleError(error) {
     console.error(error);
