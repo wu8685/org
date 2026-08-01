@@ -21,15 +21,16 @@ import (
 )
 
 type Config struct {
-	RegistryAllowlist         []string
-	TemporalWebBaseURL        string
-	TemporalNamespace         string
-	BootstrapTTL              time.Duration
-	BootstrapReceiptGrace     time.Duration
-	BootstrapVerifier         BootstrapWorkloadVerifier
-	Now                       func() time.Time
-	BootstrapEndpoint         string
-	PublishOperationRetention time.Duration
+	RegistryAllowlist           []string
+	TemporalWebBaseURL          string
+	TemporalNamespace           string
+	BootstrapTTL                time.Duration
+	BootstrapReceiptGrace       time.Duration
+	BootstrapVerifier           BootstrapWorkloadVerifier
+	Now                         func() time.Time
+	BootstrapEndpoint           string
+	PublishOperationRetention   time.Duration
+	InvocationReconcileInterval time.Duration
 }
 
 var (
@@ -125,16 +126,21 @@ type Store interface {
 	SaveTenant(domain.Tenant) error
 	Tenant(string) (domain.Tenant, bool)
 	TenantBySlug(string) (domain.Tenant, bool)
+	AllTenants() []domain.Tenant
 	SaveWorker(string, domain.Worker) error
 	Worker(string, string) (domain.Worker, bool)
 	Workers(string) []domain.Worker
 	SaveWorkerVersion(string, domain.WorkerVersion) error
+	CommitCurrentWorkerVersion(string, domain.Worker, domain.WorkerVersion, *domain.AuditRecord) error
 	WorkerVersions(string, string) []domain.WorkerVersion
 	WorkerVersion(string, string, string) (domain.WorkerVersion, bool)
 	UpdateWorkerVersionDescription(string, string, string, int64, string) (domain.WorkerVersion, error)
 	SaveInvocation(string, domain.Invocation) error
+	CommitInvocationReservation(string, domain.Invocation, domain.QuotaLease) error
+	CommitInvocationTerminal(string, domain.Invocation, string) error
 	Invocation(string, string) (domain.Invocation, bool)
 	Invocations(string) []domain.Invocation
+	AllInvocations() []domain.Invocation
 	InvocationByIdempotency(string, string, string, string) (domain.Invocation, bool)
 	SaveActionOperation(string, domain.ActionOperation) error
 	ActionOperation(string, string, string, string, string) (domain.ActionOperation, bool)
@@ -156,17 +162,20 @@ type Store interface {
 }
 
 type ControlPlane struct {
-	cfg              Config
-	store            Store
-	cluster          Cluster
-	executor         Executor
-	bootstrap        *BootstrapRegistry
-	mu               sync.Mutex
-	promotionMu      sync.Mutex
-	promotionQueue   chan BootstrapRegistrationReceipt
-	promotionQueued  map[string]bool
-	promotionStarted bool
-	promotionDone    chan error
+	cfg               Config
+	store             Store
+	cluster           Cluster
+	executor          Executor
+	bootstrap         *BootstrapRegistry
+	mu                sync.Mutex
+	promotionMu       sync.Mutex
+	promotionQueue    chan BootstrapRegistrationReceipt
+	promotionQueued   map[string]bool
+	promotionStarted  bool
+	promotionDone     chan error
+	invocationMu      sync.Mutex
+	invocationStarted bool
+	invocationDone    chan error
 }
 
 func New(cfg Config, store Store, cluster Cluster, executor Executor) *ControlPlane {
@@ -352,37 +361,22 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionSetting); err != nil {
 		return domain.WorkerVersion{}, err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err := c.executor.SetCurrent(ctx, version); err != nil {
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
 		return failed, cause
 	}
-	c.mu.Lock()
-	locked := true
-	defer func() {
-		if locked {
-			c.mu.Unlock()
-		}
-	}()
 	worker, ok := c.store.Worker(version.TenantID, version.WorkerName)
 	if !ok {
 		return domain.WorkerVersion{}, ErrNotFound
 	}
-	for _, old := range c.store.WorkerVersions(version.TenantID, version.WorkerName) {
-		if old.ID != version.ID && old.Current {
-			old.Current = false
-			if err := c.store.SaveWorkerVersion(version.TenantID, old); err != nil {
-				return domain.WorkerVersion{}, err
-			}
-		}
-	}
 	now := time.Now().UTC()
 	version.Current, version.State, version.UpdatedAt = true, domain.WorkerVersionReady, now
 	version.PromotionPhase, version.PromotionUpdatedAt = domain.WorkerVersionPromotionSucceeded, &now
-	if err := c.commitPromotionTransition(version, domain.WorkerVersionPromotionSucceeded, "success", ""); err != nil {
-		return domain.WorkerVersion{}, err
-	}
 	worker.CurrentVersion, worker.UpdatedAt = version.Version, time.Now().UTC()
-	if err := c.store.SaveWorker(version.TenantID, worker); err != nil {
+	audit := c.promotionAudit(version, domain.WorkerVersionPromotionSucceeded, "success", "")
+	if err := c.store.CommitCurrentWorkerVersion(version.TenantID, worker, version, &audit); err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	return version, nil
@@ -395,7 +389,12 @@ func (c *ControlPlane) savePromotionPhase(version domain.WorkerVersion, phase do
 }
 
 func (c *ControlPlane) commitPromotionTransition(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase, outcome, errorClass string) error {
-	audit := domain.AuditRecord{
+	audit := c.promotionAudit(version, phase, outcome, errorClass)
+	return c.store.CommitWorkerVersionAudit(version.TenantID, version, audit)
+}
+
+func (c *ControlPlane) promotionAudit(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase, outcome, errorClass string) domain.AuditRecord {
+	return domain.AuditRecord{
 		ID: newID("aud"), TenantID: version.TenantID, TenantSlug: version.TenantSlug,
 		PrincipalID: "bootstrap-promotion-controller", AuthenticationMethod: "internal-controller",
 		RequestID: version.PromotionAttemptID, Action: "worker.version.promotion." + string(phase),
@@ -407,7 +406,6 @@ func (c *ControlPlane) commitPromotionTransition(version domain.WorkerVersion, p
 		},
 		CreatedAt: time.Now().UTC(),
 	}
-	return c.store.CommitWorkerVersionAudit(version.TenantID, version, audit)
 }
 
 func (c *ControlPlane) CreateWorker(_ context.Context, auth AuthenticatedContext, req CreateWorkerRequest) (result domain.Worker, err error) {
@@ -492,7 +490,7 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 	runtime := req.Runtime
 	runtime.ServiceAccount = names.ServiceAccount
 	now := time.Now().UTC()
-	d := domain.WorkerVersion{ID: id, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Description: strings.TrimSpace(req.Description), Revision: 1, Image: req.Image, Version: req.Version, ManifestDigest: req.ManifestDigest, VersionConfig: append(json.RawMessage(nil), req.VersionConfig...), Metadata: req.Metadata, Runtime: runtime, Source: req.Source, TaskQueue: names.TaskQueue, WorkerDeployment: names.WorkerDeployment, KubernetesDeployment: names.KubernetesDeployment, KubernetesServiceAccount: names.ServiceAccount, KubernetesNetworkPolicy: names.NetworkPolicy, TenantHash: names.TenantHash, VersionHash: names.VersionHash, State: domain.WorkerVersionPending, Actor: auth.PrincipalID, CreatedAt: now, UpdatedAt: now}
+	d := domain.WorkerVersion{ID: id, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Description: strings.TrimSpace(req.Description), Revision: 1, Image: req.Image, Version: req.Version, ManifestDigest: req.ManifestDigest, VersionConfig: append(json.RawMessage(nil), req.VersionConfig...), Metadata: req.Metadata, Runtime: runtime, Source: req.Source, TaskQueue: names.TaskQueue, WorkerDeployment: names.WorkerDeployment, KubernetesDeployment: names.KubernetesDeployment, KubernetesServiceAccount: names.ServiceAccount, KubernetesNetworkPolicy: names.NetworkPolicy, TenantHash: names.TenantHash, VersionHash: names.VersionHash, State: domain.WorkerVersionPending, DeploymentActive: true, Actor: auth.PrincipalID, CreatedAt: now, UpdatedAt: now}
 	result = d
 	cpuMilli, err := parseCPU(runtime.CPU)
 	if err != nil {
@@ -551,6 +549,7 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 			return domain.WorkerVersion{}, ErrNotFound
 		}
 		latest.Health.KubernetesReady = true
+		latest.DeploymentActive = false
 		if latest.RegistrationStatus == "" {
 			latest.RegistrationStatus = domain.BootstrapRegistrationAwaiting
 		}
@@ -561,7 +560,7 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 		result = latest
 		return latest, nil
 	}
-	d.Health.KubernetesReady = true
+	d.Health.KubernetesReady, d.DeploymentActive = true, false
 	if err := c.executor.WaitForPoller(ctx, d); err != nil {
 		return c.failWorkerVersion(tenant.ID, d, err)
 	}
@@ -575,23 +574,14 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 			return c.failWorkerVersion(tenant.ID, d, probeErr)
 		}
 	}
+	c.mu.Lock()
+	locked = true
 	if err := c.executor.SetCurrent(ctx, d); err != nil {
 		return c.failWorkerVersion(tenant.ID, d, err)
 	}
-	for _, old := range c.store.WorkerVersions(tenant.ID, req.WorkerName) {
-		if old.ID != d.ID && old.Current {
-			old.Current = false
-			if err := c.store.SaveWorkerVersion(tenant.ID, old); err != nil {
-				return domain.WorkerVersion{}, err
-			}
-		}
-	}
 	d.Current, d.State = true, domain.WorkerVersionReady
-	if err := c.store.SaveWorkerVersion(tenant.ID, d); err != nil {
-		return domain.WorkerVersion{}, err
-	}
 	worker.CurrentVersion, worker.UpdatedAt = d.Version, time.Now().UTC()
-	if err := c.store.SaveWorker(tenant.ID, worker); err != nil {
+	if err := c.store.CommitCurrentWorkerVersion(tenant.ID, worker, d, nil); err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	result = d
@@ -616,7 +606,7 @@ func validateRuntimeIdentity(version domain.WorkerVersion, identity RuntimeIdent
 
 func (c *ControlPlane) failWorkerVersion(tenantID string, d domain.WorkerVersion, cause error) (domain.WorkerVersion, error) {
 	now := time.Now().UTC()
-	d.State, d.Failure, d.UpdatedAt = domain.WorkerVersionFailed, cause.Error(), now
+	d.State, d.Failure, d.UpdatedAt, d.DeploymentActive = domain.WorkerVersionFailed, cause.Error(), now, false
 	if d.RegistrationStatus == domain.BootstrapRegistrationAccepted {
 		d.PromotionPhase, d.PromotionUpdatedAt = domain.WorkerVersionPromotionFailed, &now
 		if err := c.commitPromotionTransition(d, domain.WorkerVersionPromotionFailed, "failed", classifyError(cause)); err != nil {
@@ -683,29 +673,162 @@ func (c *ControlPlane) Start(ctx context.Context, auth AuthenticatedContext, req
 	if err != nil {
 		return domain.Invocation{}, err
 	}
-	start := ExecutionStart{InvocationID: invocationID, WorkflowID: names.WorkflowID, Workflow: req.Workflow, Input: req.Input, TaskQueue: selected.TaskQueue, DeploymentName: selected.WorkerDeployment}
-	if req.WorkerVersion != "" {
-		start.PinnedVersion = selected.Version
-	}
+	start := ExecutionStart{InvocationID: invocationID, WorkflowID: names.WorkflowID, Workflow: req.Workflow, Input: req.Input, TaskQueue: selected.TaskQueue, DeploymentName: selected.WorkerDeployment, PinnedVersion: selected.Version}
+	now := time.Now().UTC()
+	inv := domain.Invocation{ID: invocationID, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Workflow: req.Workflow, SelectedVersion: selected.Version, TaskQueue: selected.TaskQueue, WorkerDeployment: selected.WorkerDeployment, TemporalWorkflowID: names.WorkflowID, Input: append(json.RawMessage(nil), req.Input...), IdempotencyKey: req.IdempotencyKey, Actor: auth.PrincipalID, State: domain.InvocationStarting, CreatedAt: now, UpdatedAt: now}
+	result = inv
 	runLeaseID := "run:" + invocationID
-	if err := c.store.AcquireQuotaLease(tenant.ID, domain.QuotaLease{ID: runLeaseID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: time.Now().UTC()}); err != nil {
+	if err := c.store.CommitInvocationReservation(tenant.ID, inv, domain.QuotaLease{ID: runLeaseID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: now}); err != nil {
 		return domain.Invocation{}, err
 	}
-	defer func() {
-		if err != nil {
-			_ = c.store.ReleaseQuotaLease(tenant.ID, runLeaseID)
-		}
-	}()
 	runID, err := c.executor.Start(ctx, start)
 	if err != nil {
-		return domain.Invocation{}, err
+		return inv, err
 	}
-	inv := domain.Invocation{ID: invocationID, TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: req.WorkerName, Workflow: req.Workflow, SelectedVersion: selected.Version, TaskQueue: selected.TaskQueue, WorkerDeployment: selected.WorkerDeployment, TemporalWorkflowID: names.WorkflowID, TemporalRunID: runID, Input: req.Input, IdempotencyKey: req.IdempotencyKey, Actor: auth.PrincipalID, CreatedAt: time.Now().UTC()}
+	inv.TemporalRunID, inv.State, inv.UpdatedAt = runID, domain.InvocationRunning, time.Now().UTC()
 	if err := c.store.SaveInvocation(tenant.ID, inv); err != nil {
-		return domain.Invocation{}, err
+		return inv, err
 	}
 	result = inv
 	return inv, nil
+}
+
+func (c *ControlPlane) ReconcileInvocations(ctx context.Context) error {
+	var reconcileErr error
+	for _, invocation := range c.store.AllInvocations() {
+		if invocation.State == domain.InvocationStarting {
+			err := func() error {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				current, ok := c.store.Invocation(invocation.TenantID, invocation.ID)
+				if !ok || current.State != domain.InvocationStarting {
+					return nil
+				}
+				start := ExecutionStart{
+					InvocationID: current.ID, WorkflowID: current.TemporalWorkflowID, Workflow: current.Workflow,
+					Input: current.Input, TaskQueue: current.TaskQueue, DeploymentName: current.WorkerDeployment,
+					PinnedVersion: current.SelectedVersion,
+				}
+				runID, err := c.executor.Start(ctx, start)
+				if err != nil {
+					return err
+				}
+				current.TemporalRunID, current.State, current.UpdatedAt = runID, domain.InvocationRunning, time.Now().UTC()
+				return c.store.SaveInvocation(current.TenantID, current)
+			}()
+			if err != nil {
+				reconcileErr = errors.Join(reconcileErr, err)
+			}
+			continue
+		}
+		if invocation.State != "" && invocation.State != domain.InvocationRunning {
+			continue
+		}
+		state, err := c.executor.Describe(ctx, invocation)
+		if err != nil {
+			reconcileErr = errors.Join(reconcileErr, err)
+			continue
+		}
+		terminal, ok := terminalInvocationState(state.Status)
+		if !ok {
+			continue
+		}
+		invocation.State, invocation.UpdatedAt = terminal, time.Now().UTC()
+		if terminal == domain.InvocationFailed {
+			invocation.Failure = state.Status
+		}
+		if err := c.store.CommitInvocationTerminal(invocation.TenantID, invocation, "run:"+invocation.ID); err != nil {
+			reconcileErr = errors.Join(reconcileErr, err)
+		}
+	}
+	if err := c.reconcileDurableQuotaLeases(); err != nil {
+		reconcileErr = errors.Join(reconcileErr, err)
+	}
+	return reconcileErr
+}
+
+func (c *ControlPlane) reconcileDurableQuotaLeases() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var reconcileErr error
+	for _, tenant := range c.store.AllTenants() {
+		active := map[string]bool{}
+		for _, version := range c.store.WorkerVersions(tenant.ID, "") {
+			if version.State != domain.WorkerVersionFailed {
+				active["release:"+version.ID] = true
+			}
+			if version.DeploymentActive {
+				active["deployment:"+version.ID] = true
+			}
+		}
+		for _, invocation := range c.store.Invocations(tenant.ID) {
+			if invocation.State == "" || invocation.State == domain.InvocationStarting || invocation.State == domain.InvocationRunning {
+				active["run:"+invocation.ID] = true
+			}
+		}
+		if _, err := c.store.ReconcileQuotaLeases(tenant.ID, active); err != nil {
+			reconcileErr = errors.Join(reconcileErr, err)
+		}
+	}
+	return reconcileErr
+}
+
+func (c *ControlPlane) StartInvocationReconciler(ctx context.Context) error {
+	c.invocationMu.Lock()
+	defer c.invocationMu.Unlock()
+	if c.invocationStarted {
+		return errors.New("invocation reconciler is already running")
+	}
+	c.invocationStarted = true
+	c.invocationDone = make(chan error, 1)
+	go c.runInvocationReconciler(ctx, c.invocationDone)
+	return nil
+}
+
+func (c *ControlPlane) WaitInvocationReconciler() error {
+	c.invocationMu.Lock()
+	done := c.invocationDone
+	c.invocationMu.Unlock()
+	if done == nil {
+		return errors.New("invocation reconciler is not running")
+	}
+	return <-done
+}
+
+func (c *ControlPlane) runInvocationReconciler(ctx context.Context, done chan<- error) {
+	defer func() {
+		c.invocationMu.Lock()
+		c.invocationStarted = false
+		c.invocationMu.Unlock()
+	}()
+	interval := c.cfg.InvocationReconcileInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		_ = c.ReconcileInvocations(ctx)
+		select {
+		case <-ctx.Done():
+			done <- ctx.Err()
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func terminalInvocationState(status string) (domain.InvocationState, bool) {
+	switch strings.ToLower(status) {
+	case "running", "pending", "":
+		return "", false
+	case "completed":
+		return domain.InvocationCompleted, true
+	case "canceled", "cancelled":
+		return domain.InvocationCanceled, true
+	default:
+		return domain.InvocationFailed, true
+	}
 }
 
 func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedContext, id string) (result InvocationView, err error) {
@@ -728,8 +851,14 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 	if err != nil {
 		return InvocationView{}, err
 	}
-	if status := strings.ToLower(state.Status); status != "running" && status != "pending" {
-		_ = c.store.ReleaseQuotaLease(tenant.ID, "run:"+inv.ID)
+	if terminal, ok := terminalInvocationState(state.Status); ok {
+		inv.State, inv.UpdatedAt = terminal, time.Now().UTC()
+		if terminal == domain.InvocationFailed {
+			inv.Failure = state.Status
+		}
+		if err := c.store.CommitInvocationTerminal(tenant.ID, inv, "run:"+inv.ID); err != nil {
+			return InvocationView{}, err
+		}
 	}
 	projectionJSON, err := c.executor.Query(ctx, inv, contract.ProjectionQuery, nil)
 	if err != nil {
@@ -957,7 +1086,8 @@ func (c *ControlPlane) Cancel(ctx context.Context, auth AuthenticatedContext, id
 	if err := c.executor.Cancel(ctx, inv); err != nil {
 		return err
 	}
-	return c.store.ReleaseQuotaLease(tenant.ID, "run:"+inv.ID)
+	inv.State, inv.UpdatedAt = domain.InvocationCanceled, time.Now().UTC()
+	return c.store.CommitInvocationTerminal(tenant.ID, inv, "run:"+inv.ID)
 }
 
 func (c *ControlPlane) UpdateWorkerVersionDescription(_ context.Context, auth AuthenticatedContext, workerName, version string, expectedRevision int64, description string) (result domain.WorkerVersion, err error) {
@@ -1223,6 +1353,15 @@ func (s *MemoryStore) TenantBySlug(slug string) (domain.Tenant, bool) {
 		}
 	}
 	return domain.Tenant{}, false
+}
+func (s *MemoryStore) AllTenants() []domain.Tenant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.Tenant, 0, len(s.tenants))
+	for _, tenant := range s.tenants {
+		out = append(out, tenant)
+	}
+	return out
 }
 func tenantKey(tenantID, id string) string { return tenantID + "\x00" + id }
 func (s *MemoryStore) SaveWorker(tenantID string, worker domain.Worker) error {

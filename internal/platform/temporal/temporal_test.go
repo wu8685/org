@@ -50,6 +50,18 @@ func TestContractProbeAttachesToTheSameAttemptAfterStartResponseIsLost(t *testin
 	}
 }
 
+func TestWorkflowStartReturnsExistingRunAfterAmbiguousStartResponse(t *testing.T) {
+	start := service.ExecutionStart{InvocationID: "inv-1", WorkflowID: "workflow-1", Workflow: "ChargeOrder", Input: []byte(`{}`), TaskQueue: "queue-1", DeploymentName: "deployment-1", PinnedVersion: "v1"}
+	sdk := &probeSDKStub{
+		executeErr: &serviceerror.WorkflowExecutionAlreadyStarted{RunId: "run-existing"},
+		run:        probeRunStub{runID: "run-existing"},
+	}
+	runID, err := runWorkflowStart(context.Background(), sdk, start)
+	if err != nil || runID != "run-existing" || sdk.attachedWorkflowID != start.WorkflowID || sdk.attachedRunID != "run-existing" {
+		t.Fatalf("runID=%q error=%v attached=%q/%q", runID, err, sdk.attachedWorkflowID, sdk.attachedRunID)
+	}
+}
+
 type probeSDKStub struct {
 	executeErr                        error
 	run                               client.WorkflowRun
@@ -65,14 +77,17 @@ func (s *probeSDKStub) GetWorkflow(_ context.Context, workflowID, runID string) 
 	return s.run
 }
 
-type probeRunStub struct{ result orgsdk.ContractProbe }
+type probeRunStub struct {
+	result orgsdk.ContractProbe
+	runID  string
+}
 
 func (s probeRunStub) Get(_ context.Context, value interface{}) error {
 	*(value.(*orgsdk.ContractProbe)) = s.result
 	return nil
 }
-func (probeRunStub) GetID() string    { return "" }
-func (probeRunStub) GetRunID() string { return "" }
+func (probeRunStub) GetID() string      { return "" }
+func (s probeRunStub) GetRunID() string { return s.runID }
 func (probeRunStub) GetWithOptions(context.Context, interface{}, client.WorkflowRunGetOptions) error {
 	return nil
 }

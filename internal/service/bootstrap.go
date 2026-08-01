@@ -271,6 +271,7 @@ func (s *FileStore) CommitBootstrapAcceptance(tenantID string, version domain.Wo
 			return err
 		}
 		next.WorkerVersions[versionKey] = version
+		next.WorkerVersionRouting[versionKey] = captureWorkerVersionRouting(version)
 		next.BootstrapCredentials[credential.TokenHash] = credential
 		next.Audits[tenantID] = append(next.Audits[tenantID], audit)
 		return nil

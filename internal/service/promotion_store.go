@@ -55,6 +55,7 @@ func (s *FileStore) CommitWorkerVersionAudit(tenantID string, version domain.Wor
 			return err
 		}
 		next.WorkerVersions[key] = version
+		next.WorkerVersionRouting[key] = captureWorkerVersionRouting(version)
 		next.Audits[tenantID] = append(next.Audits[tenantID], audit)
 		return nil
 	})

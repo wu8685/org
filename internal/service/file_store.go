@@ -21,6 +21,16 @@ type fileState struct {
 	ActionOperations     map[string]domain.ActionOperation     `json:"actionOperations"`
 	PublishOperations    map[string]domain.PublishOperation    `json:"publishOperations"`
 	BootstrapCredentials map[string]domain.BootstrapCredential `json:"bootstrapCredentials"`
+	WorkerVersionRouting map[string]fileWorkerVersionRouting   `json:"workerVersionRouting"`
+	InvocationRouting    map[string]fileInvocationRouting      `json:"invocationRouting"`
+}
+
+type fileWorkerVersionRouting struct {
+	TaskQueue, WorkerDeployment, KubernetesDeployment, KubernetesServiceAccount, KubernetesNetworkPolicy, TenantHash, VersionHash string
+}
+
+type fileInvocationRouting struct {
+	TaskQueue, WorkerDeployment, TemporalWorkflowID, TemporalRunID string
 }
 type FileStore struct {
 	mu              sync.RWMutex
@@ -33,7 +43,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	if path == "" {
 		return nil, errors.New("state file path is required")
 	}
-	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}}}
+	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}, WorkerVersionRouting: map[string]fileWorkerVersionRouting{}, InvocationRouting: map[string]fileInvocationRouting{}}}
 	s.persistSnapshot = s.writeSnapshot
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -72,7 +82,44 @@ func NewFileStore(path string) (*FileStore, error) {
 	if s.state.BootstrapCredentials == nil {
 		s.state.BootstrapCredentials = map[string]domain.BootstrapCredential{}
 	}
+	if s.state.WorkerVersionRouting == nil {
+		s.state.WorkerVersionRouting = map[string]fileWorkerVersionRouting{}
+	}
+	if s.state.InvocationRouting == nil {
+		s.state.InvocationRouting = map[string]fileInvocationRouting{}
+	}
+	hydrateFileStateRouting(&s.state)
 	return s, nil
+}
+
+func captureWorkerVersionRouting(version domain.WorkerVersion) fileWorkerVersionRouting {
+	return fileWorkerVersionRouting{version.TaskQueue, version.WorkerDeployment, version.KubernetesDeployment, version.KubernetesServiceAccount, version.KubernetesNetworkPolicy, version.TenantHash, version.VersionHash}
+}
+
+func captureInvocationRouting(invocation domain.Invocation) fileInvocationRouting {
+	return fileInvocationRouting{invocation.TaskQueue, invocation.WorkerDeployment, invocation.TemporalWorkflowID, invocation.TemporalRunID}
+}
+
+func hydrateFileStateRouting(state *fileState) {
+	for key, routing := range state.WorkerVersionRouting {
+		version, ok := state.WorkerVersions[key]
+		if !ok {
+			continue
+		}
+		version.TaskQueue, version.WorkerDeployment, version.KubernetesDeployment = routing.TaskQueue, routing.WorkerDeployment, routing.KubernetesDeployment
+		version.KubernetesServiceAccount, version.KubernetesNetworkPolicy = routing.KubernetesServiceAccount, routing.KubernetesNetworkPolicy
+		version.TenantHash, version.VersionHash = routing.TenantHash, routing.VersionHash
+		state.WorkerVersions[key] = version
+	}
+	for key, routing := range state.InvocationRouting {
+		invocation, ok := state.Invocations[key]
+		if !ok {
+			continue
+		}
+		invocation.TaskQueue, invocation.WorkerDeployment = routing.TaskQueue, routing.WorkerDeployment
+		invocation.TemporalWorkflowID, invocation.TemporalRunID = routing.TemporalWorkflowID, routing.TemporalRunID
+		state.Invocations[key] = invocation
+	}
 }
 
 func (s *FileStore) SaveBootstrapCredential(credential domain.BootstrapCredential) error {
@@ -137,6 +184,15 @@ func (s *FileStore) TenantBySlug(slug string) (domain.Tenant, bool) {
 	}
 	return domain.Tenant{}, false
 }
+func (s *FileStore) AllTenants() []domain.Tenant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.Tenant, 0, len(s.state.Tenants))
+	for _, tenant := range s.state.Tenants {
+		out = append(out, tenant)
+	}
+	return out
+}
 func (s *FileStore) SaveWorker(tenantID string, worker domain.Worker) error {
 	if tenantID == "" || worker.TenantID != tenantID || worker.Name == "" {
 		return errors.New("worker tenant identity mismatch")
@@ -172,7 +228,9 @@ func (s *FileStore) SaveWorkerVersion(tenantID string, d domain.WorkerVersion) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mutate(func(next *fileState) error {
-		next.WorkerVersions[tenantKey(tenantID, d.ID)] = d
+		key := tenantKey(tenantID, d.ID)
+		next.WorkerVersions[key] = d
+		next.WorkerVersionRouting[key] = captureWorkerVersionRouting(d)
 		return nil
 	})
 }
@@ -222,7 +280,9 @@ func (s *FileStore) SaveInvocation(tenantID string, i domain.Invocation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mutate(func(next *fileState) error {
-		next.Invocations[tenantKey(tenantID, i.ID)] = i
+		key := tenantKey(tenantID, i.ID)
+		next.Invocations[key] = i
+		next.InvocationRouting[key] = captureInvocationRouting(i)
 		return nil
 	})
 }
@@ -326,6 +386,7 @@ func cloneFileState(state fileState) (fileState, error) {
 	if err := json.Unmarshal(b, &clone); err != nil {
 		return fileState{}, err
 	}
+	hydrateFileStateRouting(&clone)
 	return clone, nil
 }
 

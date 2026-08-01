@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,7 +173,7 @@ func TestPromotionControllerResumesAcceptedPendingVersionAfterRestart(t *testing
 	}
 
 	promoted := make(chan struct{}, 1)
-	restartedExecutor := &fakeExecutor{probeResult: RuntimeIdentity{ManifestDigest: contract.ManifestDigest, SDKModuleVersion: orgsdk.SDKModuleVersion, RuntimeProtocolVersion: orgsdk.RuntimeProtocolVersion, WorkerBuildID: version.Version}, setCurrent: func() { promoted <- struct{}{} }}
+	restartedExecutor := &fakeExecutor{probeResult: RuntimeIdentity{ManifestDigest: contract.ManifestDigest, SDKModuleVersion: orgsdk.SDKModuleVersion, RuntimeProtocolVersion: orgsdk.RuntimeProtocolVersion, WorkerBuildID: version.Version}, setCurrent: func(domain.WorkerVersion) { promoted <- struct{}{} }}
 	reopened, err := NewFileStore(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -326,6 +328,14 @@ func (s *promotionCommitFaultStore) CommitWorkerVersionAudit(tenantID string, ve
 	return s.Store.CommitWorkerVersionAudit(tenantID, version, audit)
 }
 
+func (s *promotionCommitFaultStore) CommitCurrentWorkerVersion(tenantID string, worker domain.Worker, version domain.WorkerVersion, audit *domain.AuditRecord) error {
+	if s.failSucceededOnce && version.PromotionPhase == domain.WorkerVersionPromotionSucceeded {
+		s.failSucceededOnce = false
+		return errors.New("injected final promotion persistence failure")
+	}
+	return s.Store.CommitCurrentWorkerVersion(tenantID, worker, version, audit)
+}
+
 func TestRegistrationDuringKubernetesReadinessDoesNotLoseAcceptedContract(t *testing.T) {
 	cluster := &fakeCluster{}
 	var cp *ControlPlane
@@ -401,7 +411,7 @@ func TestStartUsesCurrentOrExplicitReadyVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.SelectedVersion != "v2" || executor.starts[0].PinnedVersion != "" {
+	if current.SelectedVersion != "v2" || executor.starts[0].PinnedVersion != "v2" {
 		t.Fatalf("current start = %#v / %#v", current, executor.starts[0])
 	}
 
@@ -412,6 +422,300 @@ func TestStartUsesCurrentOrExplicitReadyVersion(t *testing.T) {
 	if historical.SelectedVersion != "v1" || executor.starts[1].PinnedVersion != "v1" {
 		t.Fatalf("historical start = %#v / %#v", historical, executor.starts[1])
 	}
+}
+
+func TestDefaultStartSerializesWithPromotionAndPinsResolvedCurrent(t *testing.T) {
+	cluster := &fakeCluster{}
+	executor := &fakeExecutor{}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, cluster, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
+		t.Fatal(err)
+	}
+
+	publishOutsideLock := make(chan struct{})
+	releaseDeployment := make(chan struct{})
+	cluster.apply = func(version domain.WorkerVersion) error {
+		if version.Version == "v2" {
+			close(publishOutsideLock)
+			<-releaseDeployment
+		}
+		return nil
+	}
+	startEntered := make(chan struct{})
+	releaseStart := make(chan struct{})
+	executor.start = func(start ExecutionStart) (string, error) {
+		close(startEntered)
+		<-releaseStart
+		return "run-" + start.InvocationID, nil
+	}
+	v2SetCurrent := make(chan struct{}, 1)
+	executor.setCurrent = func(version domain.WorkerVersion) {
+		if version.Version == "v2" {
+			v2SetCurrent <- struct{}{}
+		}
+	}
+
+	publishResult := make(chan error, 1)
+	go func() {
+		_, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v2"))
+		publishResult <- err
+	}()
+	select {
+	case <-publishOutsideLock:
+	case <-time.After(time.Second):
+		t.Fatal("v2 publish did not reach the unlocked deployment phase")
+	}
+	startResult := make(chan domain.Invocation, 1)
+	startErr := make(chan error, 1)
+	go func() {
+		invocation, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+		startResult <- invocation
+		startErr <- err
+	}()
+	select {
+	case <-startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("default start did not resolve Current")
+	}
+	close(releaseDeployment)
+	select {
+	case <-v2SetCurrent:
+		t.Fatal("promotion changed Temporal Current while the resolved default start was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseStart)
+	invocation := <-startResult
+	if err := <-startErr; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-publishResult; err != nil {
+		t.Fatal(err)
+	}
+	if invocation.SelectedVersion != "v1" || len(executor.starts) == 0 || executor.starts[0].PinnedVersion != "v1" {
+		t.Fatalf("resolved start = %#v starts=%#v", invocation, executor.starts)
+	}
+}
+
+func TestStartPersistsInvocationReservationAndQuotaBeforeTemporal(t *testing.T) {
+	store := NewMemoryStore()
+	tenant := testTenant("tenant-test", "test-tenant")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{}
+	executor.start = func(start ExecutionStart) (string, error) {
+		invocation, ok := store.Invocation(tenant.ID, start.InvocationID)
+		if !ok || invocation.TemporalWorkflowID != start.WorkflowID || invocation.SelectedVersion != start.PinnedVersion {
+			return "", errors.New("durable invocation reservation was not visible before Temporal start")
+		}
+		leases := store.QuotaLeases(tenant.ID)
+		if len(leases) != 2 { // one active release plus this run reservation
+			return "", fmt.Errorf("durable run quota reservation was not visible before Temporal start: %#v", leases)
+		}
+		return "run-" + start.InvocationID, nil
+	}
+	cp := New(Config{RegistryAllowlist: []string{"registry.example.com"}}, store, &fakeCluster{}, executor)
+	auth := authFor(tenant)
+	if _, err := cp.CreateWorker(context.Background(), auth, CreateWorkerRequest{WorkerName: "payments-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInvocationReconcilerRecoversStartAfterTemporalSuccessAndLocalCommitFailure(t *testing.T) {
+	base := NewMemoryStore()
+	tenant := testTenant("tenant-test", "test-tenant")
+	if err := base.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	store := &invocationRunningFaultStore{Store: base, failRunningOnce: true}
+	executor := &fakeExecutor{}
+	cp := New(Config{RegistryAllowlist: []string{"registry.example.com"}}, store, &fakeCluster{}, executor)
+	auth := authFor(tenant)
+	if _, err := cp.CreateWorker(context.Background(), auth, CreateWorkerRequest{WorkerName: "payments-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+	if !errors.Is(err, errInjectedInvocationRunningCommit) {
+		t.Fatalf("Start reservation=%#v error=%v", reserved, err)
+	}
+	stored, ok := base.Invocation(tenant.ID, reserved.ID)
+	if !ok || stored.State != domain.InvocationStarting || stored.TemporalRunID != "" {
+		t.Fatalf("durable start reservation = %#v", stored)
+	}
+	if err := cp.ReconcileInvocations(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = base.Invocation(tenant.ID, reserved.ID)
+	if stored.State != domain.InvocationRunning || stored.TemporalRunID == "" || len(executor.starts) != 2 {
+		t.Fatalf("reconciled invocation=%#v starts=%#v", stored, executor.starts)
+	}
+}
+
+func TestInvocationReconcilerPersistsTerminalStateAndReleasesQuotaWithoutRead(t *testing.T) {
+	store := NewMemoryStore()
+	tenant := testTenant("tenant-terminal", "terminal")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	invocation := domain.Invocation{
+		ID: "inv-terminal", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "worker", Workflow: "Workflow", SelectedVersion: "v1",
+		TemporalWorkflowID: "workflow-terminal", TemporalRunID: "run-terminal", State: domain.InvocationRunning, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.SaveInvocation(tenant.ID, invocation); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcquireQuotaLease(tenant.ID, domain.QuotaLease{ID: "run:" + invocation.ID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	cp := New(Config{}, store, &fakeCluster{}, &fakeExecutor{describeResult: ExecutionState{Status: "completed"}})
+	if err := cp.ReconcileInvocations(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.Invocation(tenant.ID, invocation.ID)
+	if stored.State != domain.InvocationCompleted || len(store.QuotaLeases(tenant.ID)) != 0 {
+		t.Fatalf("terminal invocation=%#v leases=%#v", stored, store.QuotaLeases(tenant.ID))
+	}
+}
+
+func TestInvocationReconcilerControllerResumesDurableStartsAfterRestart(t *testing.T) {
+	store := NewMemoryStore()
+	tenant := testTenant("tenant-restart", "restart")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	invocation := domain.Invocation{
+		ID: "inv-restart", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "worker", Workflow: "Workflow", SelectedVersion: "v1",
+		TaskQueue: "queue", WorkerDeployment: "deployment", TemporalWorkflowID: "workflow-restart", State: domain.InvocationStarting, CreatedAt: now, UpdatedAt: now,
+	}
+	lease := domain.QuotaLease{ID: "run:" + invocation.ID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: now}
+	if err := store.CommitInvocationReservation(tenant.ID, invocation, lease); err != nil {
+		t.Fatal(err)
+	}
+	cp := New(Config{InvocationReconcileInterval: 10 * time.Millisecond}, store, &fakeCluster{}, &fakeExecutor{})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cp.StartInvocationReconciler(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		stored, _ := store.Invocation(tenant.ID, invocation.ID)
+		if stored.State == domain.InvocationRunning {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("durable start was not resumed: %#v", stored)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := cp.WaitInvocationReconciler(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
+func TestInvocationReconcilerDoesNotRaceAnInFlightForegroundStart(t *testing.T) {
+	store := NewMemoryStore()
+	tenant := testTenant("tenant-inflight", "inflight")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	var starts atomic.Int32
+	entered, release := make(chan struct{}), make(chan struct{})
+	executor := &fakeExecutor{start: func(start ExecutionStart) (string, error) {
+		if starts.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return "run-" + start.InvocationID, nil
+	}}
+	cp := New(Config{RegistryAllowlist: []string{"registry.example.com"}, InvocationReconcileInterval: 10 * time.Millisecond}, store, &fakeCluster{}, executor)
+	auth := authFor(tenant)
+	if _, err := cp.CreateWorker(context.Background(), auth, CreateWorkerRequest{WorkerName: "payments-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.PublishVersion(context.Background(), auth, workerVersionRequest("v1")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := cp.StartInvocationReconciler(ctx); err != nil {
+		t.Fatal(err)
+	}
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "ChargeOrder", Input: []byte(`{}`)})
+		startDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("foreground start did not reach Temporal")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := starts.Load(); got != 1 {
+		t.Fatalf("Temporal starts while foreground request was in flight = %d", got)
+	}
+	close(release)
+	if err := <-startDone; err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := cp.WaitInvocationReconciler(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
+func TestBackgroundReconcilerRemovesFailedReleaseAndFinishedDeploymentLeases(t *testing.T) {
+	store := NewMemoryStore()
+	tenant := testTenant("tenant-stale", "stale")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	version := domain.WorkerVersion{ID: "ver-failed", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "worker", Version: "v1", State: domain.WorkerVersionFailed}
+	if err := store.SaveWorkerVersion(tenant.ID, version); err != nil {
+		t.Fatal(err)
+	}
+	for _, lease := range []domain.QuotaLease{
+		{ID: "release:" + version.ID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRelease, ActiveReleases: 1},
+		{ID: "deployment:" + version.ID, TenantID: tenant.ID, Kind: domain.QuotaLeaseDeployment, ConcurrentDeployments: 1},
+	} {
+		if err := store.AcquireQuotaLease(tenant.ID, lease); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cp := New(Config{}, store, &fakeCluster{}, &fakeExecutor{})
+	if err := cp.ReconcileInvocations(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if leases := store.QuotaLeases(tenant.ID); len(leases) != 0 {
+		t.Fatalf("stale failed-release leases were not reconciled: %#v", leases)
+	}
+}
+
+var errInjectedInvocationRunningCommit = errors.New("injected invocation running commit failure")
+
+type invocationRunningFaultStore struct {
+	Store
+	failRunningOnce bool
+}
+
+func (s *invocationRunningFaultStore) SaveInvocation(tenantID string, invocation domain.Invocation) error {
+	if s.failRunningOnce && invocation.State == domain.InvocationRunning {
+		s.failRunningOnce = false
+		return errInjectedInvocationRunningCommit
+	}
+	return s.Store.SaveInvocation(tenantID, invocation)
 }
 
 func TestWorkerViewContainsCurrentAndVersionDescriptions(t *testing.T) {
@@ -574,10 +878,14 @@ type fakeCluster struct {
 	calls     []string
 	bootstrap BootstrapDeployment
 	waitReady func(domain.WorkerVersion) error
+	apply     func(domain.WorkerVersion) error
 }
 
-func (f *fakeCluster) Apply(context.Context, domain.WorkerVersion) error {
+func (f *fakeCluster) Apply(_ context.Context, version domain.WorkerVersion) error {
 	f.calls = append(f.calls, "apply")
+	if f.apply != nil {
+		return f.apply(version)
+	}
 	return nil
 }
 
@@ -595,16 +903,19 @@ func (f *fakeCluster) WaitReady(_ context.Context, version domain.WorkerVersion)
 }
 
 type fakeExecutor struct {
-	calls         []string
-	starts        []ExecutionStart
-	queryResult   []byte
-	lastQuery     string
-	signals       []fakeSignal
-	signalErr     error
-	probeResult   RuntimeIdentity
-	probeErr      error
-	setCurrent    func()
-	waitForPoller func() error
+	calls          []string
+	starts         []ExecutionStart
+	queryResult    []byte
+	lastQuery      string
+	signals        []fakeSignal
+	signalErr      error
+	probeResult    RuntimeIdentity
+	probeErr       error
+	setCurrent     func(domain.WorkerVersion)
+	waitForPoller  func() error
+	start          func(ExecutionStart) (string, error)
+	describeResult ExecutionState
+	describeErr    error
 }
 
 type fakeSignal struct {
@@ -629,18 +940,24 @@ func (f *fakeExecutor) Probe(_ context.Context, version domain.WorkerVersion) (R
 	}
 	return f.probeResult, f.probeErr
 }
-func (f *fakeExecutor) SetCurrent(context.Context, domain.WorkerVersion) error {
+func (f *fakeExecutor) SetCurrent(_ context.Context, version domain.WorkerVersion) error {
 	f.calls = append(f.calls, "set-current")
 	if f.setCurrent != nil {
-		f.setCurrent()
+		f.setCurrent(version)
 	}
 	return nil
 }
 func (f *fakeExecutor) Start(_ context.Context, s ExecutionStart) (string, error) {
 	f.starts = append(f.starts, s)
+	if f.start != nil {
+		return f.start(s)
+	}
 	return "run-" + s.InvocationID, nil
 }
 func (f *fakeExecutor) Describe(context.Context, domain.Invocation) (ExecutionState, error) {
+	if f.describeResult != (ExecutionState{}) || f.describeErr != nil {
+		return f.describeResult, f.describeErr
+	}
 	return ExecutionState{Status: "running"}, nil
 }
 func (f *fakeExecutor) Query(_ context.Context, _ domain.Invocation, query string, _ []byte) ([]byte, error) {

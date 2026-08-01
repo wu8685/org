@@ -409,6 +409,7 @@ type WorkerVersion struct {
 	VersionHash              string                      `json:"-"`
 	State                    WorkerVersionState          `json:"state"`
 	Health                   WorkerVersionHealth         `json:"health"`
+	DeploymentActive         bool                        `json:"deploymentActive,omitempty"`
 	Current                  bool                        `json:"current"`
 	Actor                    string                      `json:"actor"`
 	CreatedAt                time.Time                   `json:"createdAt"`
@@ -420,6 +421,17 @@ type WorkerVersion struct {
 	PromotionAttemptID       string                      `json:"promotionAttemptId,omitempty"`
 	PromotionUpdatedAt       *time.Time                  `json:"promotionUpdatedAt,omitempty"`
 }
+
+type InvocationState string
+
+const (
+	InvocationStarting  InvocationState = "starting"
+	InvocationRunning   InvocationState = "running"
+	InvocationCompleted InvocationState = "completed"
+	InvocationFailed    InvocationState = "failed"
+	InvocationCanceled  InvocationState = "canceled"
+)
+
 type Invocation struct {
 	ID                 string          `json:"id"`
 	TenantID           string          `json:"tenantId"`
@@ -434,7 +446,10 @@ type Invocation struct {
 	Input              json.RawMessage `json:"input"`
 	IdempotencyKey     string          `json:"idempotencyKey,omitempty"`
 	Actor              string          `json:"actor"`
+	State              InvocationState `json:"state"`
+	Failure            string          `json:"failure,omitempty"`
 	CreatedAt          time.Time       `json:"createdAt"`
+	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
 type AuditRecord struct {

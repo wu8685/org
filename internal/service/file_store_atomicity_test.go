@@ -150,3 +150,100 @@ func TestFileStorePromotionTransitionAndAuditCommitAtomically(t *testing.T) {
 		t.Fatalf("failed transition changed disk audits: %#v", got)
 	}
 }
+
+func TestFileStoreInvocationReservationAndTerminalLeaseTransitionAreAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant := testTenant("tenant-invocation", "invocation")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	invocation := domain.Invocation{ID: "inv-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, State: domain.InvocationStarting, TemporalWorkflowID: "workflow-1", TaskQueue: "queue-1", WorkerDeployment: "deployment-1", SelectedVersion: "v1", CreatedAt: now, UpdatedAt: now}
+	lease := domain.QuotaLease{ID: "run:" + invocation.ID, TenantID: tenant.ID, Kind: domain.QuotaLeaseRun, ConcurrentRuns: 1, CreatedAt: now}
+	injected := errors.New("injected invocation persist failure")
+	store.persistSnapshot = func(fileState) error { return injected }
+	if err := store.CommitInvocationReservation(tenant.ID, invocation, lease); !errors.Is(err, injected) {
+		t.Fatalf("CommitInvocationReservation error = %v", err)
+	}
+	if _, ok := store.Invocation(tenant.ID, invocation.ID); ok || len(store.QuotaLeases(tenant.ID)) != 0 {
+		t.Fatalf("failed reservation changed live state: invocation=%v leases=%#v", ok, store.QuotaLeases(tenant.ID))
+	}
+
+	store.persistSnapshot = store.writeSnapshot
+	if err := store.CommitInvocationReservation(tenant.ID, invocation, lease); err != nil {
+		t.Fatal(err)
+	}
+	running := invocation
+	running.State, running.TemporalRunID = domain.InvocationRunning, "run-1"
+	if err := store.SaveInvocation(tenant.ID, running); err != nil {
+		t.Fatal(err)
+	}
+	terminal := running
+	terminal.State = domain.InvocationCompleted
+	store.persistSnapshot = func(fileState) error { return injected }
+	if err := store.CommitInvocationTerminal(tenant.ID, terminal, lease.ID); !errors.Is(err, injected) {
+		t.Fatalf("CommitInvocationTerminal error = %v", err)
+	}
+	if got, _ := store.Invocation(tenant.ID, invocation.ID); got.State != domain.InvocationRunning || len(store.QuotaLeases(tenant.ID)) != 1 {
+		t.Fatalf("failed terminal commit changed live state: invocation=%#v leases=%#v", got, store.QuotaLeases(tenant.ID))
+	}
+
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := reopened.Invocation(tenant.ID, invocation.ID); got.State != domain.InvocationRunning || got.TemporalWorkflowID != invocation.TemporalWorkflowID || got.TemporalRunID != running.TemporalRunID || got.TaskQueue != invocation.TaskQueue || got.WorkerDeployment != invocation.WorkerDeployment || len(reopened.QuotaLeases(tenant.ID)) != 1 {
+		t.Fatalf("failed terminal commit changed disk state: invocation=%#v leases=%#v", got, reopened.QuotaLeases(tenant.ID))
+	}
+}
+
+func TestFileStoreCurrentWorkerVersionTransitionIsAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant := testTenant("tenant-current", "current")
+	if err := store.SaveTenant(tenant); err != nil {
+		t.Fatal(err)
+	}
+	worker := domain.Worker{TenantID: tenant.ID, TenantSlug: tenant.Slug, Name: "worker", CurrentVersion: "v1"}
+	if err := store.SaveWorker(tenant.ID, worker); err != nil {
+		t.Fatal(err)
+	}
+	v1 := domain.WorkerVersion{ID: "ver-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: worker.Name, Version: "v1", State: domain.WorkerVersionReady, Current: true}
+	v2 := domain.WorkerVersion{ID: "ver-2", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: worker.Name, Version: "v2", State: domain.WorkerVersionPending, TaskQueue: "queue-2", WorkerDeployment: "deployment-2", KubernetesDeployment: "kube-2"}
+	if err := store.SaveWorkerVersion(tenant.ID, v1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveWorkerVersion(tenant.ID, v2); err != nil {
+		t.Fatal(err)
+	}
+	worker.CurrentVersion = "v2"
+	v2.State, v2.Current = domain.WorkerVersionReady, true
+	injected := errors.New("injected current transition failure")
+	store.persistSnapshot = func(fileState) error { return injected }
+	if err := store.CommitCurrentWorkerVersion(tenant.ID, worker, v2, nil); !errors.Is(err, injected) {
+		t.Fatalf("CommitCurrentWorkerVersion error = %v", err)
+	}
+	gotWorker, _ := store.Worker(tenant.ID, worker.Name)
+	gotV1, _ := store.WorkerVersion(tenant.ID, worker.Name, "v1")
+	gotV2, _ := store.WorkerVersion(tenant.ID, worker.Name, "v2")
+	if gotWorker.CurrentVersion != "v1" || !gotV1.Current || gotV2.Current || gotV2.State != domain.WorkerVersionPending {
+		t.Fatalf("failed transition changed live state: worker=%#v v1=%#v v2=%#v", gotWorker, gotV1, gotV2)
+	}
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotWorker, _ = reopened.Worker(tenant.ID, worker.Name)
+	gotV1, _ = reopened.WorkerVersion(tenant.ID, worker.Name, "v1")
+	gotV2, _ = reopened.WorkerVersion(tenant.ID, worker.Name, "v2")
+	if gotWorker.CurrentVersion != "v1" || !gotV1.Current || gotV2.Current || gotV2.State != domain.WorkerVersionPending || gotV2.TaskQueue != v2.TaskQueue || gotV2.WorkerDeployment != v2.WorkerDeployment || gotV2.KubernetesDeployment != v2.KubernetesDeployment {
+		t.Fatalf("failed transition changed disk state: worker=%#v v1=%#v v2=%#v", gotWorker, gotV1, gotV2)
+	}
+}

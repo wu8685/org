@@ -132,13 +132,22 @@ func (c *Client) SetCurrent(ctx context.Context, d domain.WorkerVersion) error {
 }
 
 func (c *Client) Start(ctx context.Context, start service.ExecutionStart) (string, error) {
+	return runWorkflowStart(ctx, c.sdk, start)
+}
+
+func runWorkflowStart(ctx context.Context, sdk contractProbeClient, start service.ExecutionStart) (string, error) {
 	input, err := decodeInput(start.Input)
 	if err != nil {
 		return "", err
 	}
-	run, err := c.sdk.ExecuteWorkflow(ctx, buildStartOptions(start), start.Workflow, input)
+	options := buildStartOptions(start)
+	run, err := sdk.ExecuteWorkflow(ctx, options, start.Workflow, input)
 	if err != nil {
-		return "", err
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		if !errors.As(err, &alreadyStarted) || alreadyStarted.RunId == "" {
+			return "", err
+		}
+		run = sdk.GetWorkflow(ctx, options.ID, alreadyStarted.RunId)
 	}
 	return run.GetRunID(), nil
 }

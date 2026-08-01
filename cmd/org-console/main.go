@@ -58,10 +58,16 @@ func main() {
 	if err := controlPlane.StartBootstrapPromotionController(promotionCtx); err != nil {
 		log.Fatal(err)
 	}
+	if err := controlPlane.StartInvocationReconciler(promotionCtx); err != nil {
+		log.Fatal(err)
+	}
 	defer func() {
 		cancelPromotions()
 		if err := controlPlane.WaitBootstrapPromotionController(); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("bootstrap promotion controller stopped: %v", err)
+		}
+		if err := controlPlane.WaitInvocationReconciler(); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("invocation reconciler stopped: %v", err)
 		}
 	}()
 	consoleHandler := console.New(console.Config{

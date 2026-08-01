@@ -111,6 +111,9 @@ func (r *acceptanceRun) controlPlane() *service.ControlPlane {
 	if err := r.control.StartBootstrapPromotionController(r.ctx); err != nil {
 		r.t.Fatalf("start bootstrap promotion controller: %v", err)
 	}
+	if err := r.control.StartInvocationReconciler(r.ctx); err != nil {
+		r.t.Fatalf("start invocation reconciler: %v", err)
+	}
 	r.bootstrapServer = &http.Server{Handler: service.NewBootstrapRegistrationHandler(r.control, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org"}, nil)), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = r.bootstrapServer.Serve(listener) }()
 	for suffix := range r.tenants {

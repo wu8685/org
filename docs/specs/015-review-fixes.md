@@ -60,9 +60,15 @@ fault-injection覆盖accepted后crash、poller前restart、probe response丢失�
 
 promotion与Start必须通过同一Worker级serialized transition协调。default start解析Current后，直到Temporal接受start前该Current不可被promotion切换；显式历史版本继续使用Pinned override。若Temporal API无法证明unversioned start实际选择结果，则control plane必须使用与resolved Current等价的server-selected override，并在文档中说明这是race-free Current snapshot，不改变用户“未指定即Current”语义。
 
+MVP采用后一方案：default start仍由服务端解析调用时的Current，但发送Temporal请求时显式使用该resolved WorkerVersion的Pinned override。promotion的SetCurrent与default start从解析Current到Temporal接受start共用同一serialized section；因此Run记录、实际执行版本与用户看到的“调用时Current”一致。该内部override不向用户暴露Temporal概念，也不改变显式历史版本选择语义。
+
 Start先durable保存`starting` reservation（deterministic Workflow ID、selected version、input digest、actor、quota lease），再调用Temporal，成功后保存Run ID/`running`；失败或crash由reconcilerdescribe/start conflict恢复，不创建第二个Workflow。Invocation persistence failure不得产生不可见execution。
 
+`starting` Invocation与run quota lease必须在同一次store commit中创建。reconciler只在与foreground Start相同的serialized section内重新读取后恢复仍为`starting`的记录；Temporal AlreadyStarted只attach到相同deterministic Workflow ID返回的既有Run。FileStore使用仅供durable snapshot的routing sidecar保存Task Queue、Worker Deployment与Temporal Workflow/Run identity；domain的public JSON继续隐藏这些字段。
+
 release/run terminal transition与quota lease release组成可重试durable state；后台reconciler处理process crash与persist failure，不依赖GetInvocation。fault tests覆盖SetCurrent/Start/SaveInvocation/ReleaseLease各crash window及并发default start/promotion。
+
+Run terminal state与run lease删除同一次commit；Cancel同样提交`canceled`与lease删除。WorkerVersion保存durable deployment-active标记，后台reconciler从非failed releases、active deployments及starting/running Runs重建Tenant quota active set，清理failed release或已结束operation遗留的lease。Current切换将Worker.currentVersion、候选/旧版本Current标记和可选promotion Audit一次提交。
 
 ## Repair stage 5：SDK action routing与input schemas（H、I）
 
