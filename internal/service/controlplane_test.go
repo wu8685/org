@@ -97,13 +97,21 @@ func TestAcceptedBootstrapRegistrationRunsPinnedProbeBeforePromotion(t *testing.
 		t.Fatalf("promotion calls = %s", got)
 	}
 	actions := map[string]bool{}
+	outcomes := map[string]map[string]bool{}
 	for _, audit := range cp.store.Audits(version.TenantID) {
 		actions[audit.Action] = true
+		if outcomes[audit.Action] == nil {
+			outcomes[audit.Action] = map[string]bool{}
+		}
+		outcomes[audit.Action][audit.Outcome] = true
 	}
 	for _, action := range []string{"worker.version.promotion.waiting-for-poller", "worker.version.promotion.probing-contract", "worker.version.promotion.setting-current", "worker.version.promotion.succeeded"} {
 		if !actions[action] {
 			t.Fatalf("promotion Audit missing %q: %#v", action, cp.store.Audits(version.TenantID))
 		}
+	}
+	if !outcomes["worker.version.promotion.waiting-for-poller"]["ready"] || !outcomes["worker.version.promotion.probing-contract"]["verified"] {
+		t.Fatalf("promotion outcome Audits = %#v", cp.store.Audits(version.TenantID))
 	}
 }
 
@@ -135,6 +143,9 @@ func TestBootstrapPromotionFailureIsDurablyMarkedAndAudited(t *testing.T) {
 	audits := cp.store.Audits(version.TenantID)
 	if len(audits) == 0 || audits[len(audits)-1].Action != "worker.version.promotion.failed" || audits[len(audits)-1].Outcome != "failed" {
 		t.Fatalf("failed promotion Audit = %#v", audits)
+	}
+	if audits[len(audits)-1].References["failedPhase"] != string(domain.WorkerVersionPromotionProbing) {
+		t.Fatalf("probe failure phase Audit = %#v", audits)
 	}
 }
 
@@ -253,6 +264,15 @@ func TestPromotionControllerRetriesAfterFinalStatePersistenceFailure(t *testing.
 	}
 	if setCurrentCalls != 2 {
 		t.Fatalf("SetCurrent calls = %d, want one retried call after the lost local commit", setCurrentCalls)
+	}
+	retryAudited := false
+	for _, audit := range base.Audits(version.TenantID) {
+		if audit.Action == "worker.version.promotion.setting-current" && audit.Outcome == "retrying" {
+			retryAudited = true
+		}
+	}
+	if !retryAudited {
+		t.Fatalf("promotion retry Audit missing: %#v", base.Audits(version.TenantID))
 	}
 }
 

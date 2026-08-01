@@ -403,6 +403,8 @@ worker.version.promoted | failed
 
 Audit包含 Tenant ID/slug、principal（发布动作）或workload principal摘要（registration）、Worker/version、release/operation/receipt ID、image/manifest digest、Pod UID hash、request ID、outcome/error class与时间。不得包含token、workload token、Secret value、完整manifest、versionConfig/input或credential-bearing headers。
 
+实现采用durable promotion phase action承载poller/probe/promotion事件：`waiting-for-poller + ready`、`probing-contract + verified`、`setting-current`、`succeeded`；retry使用当前phase加`retrying`，failure额外记录`failedPhase`。credential issuance、已绑定credential的registration/revoke/reject与相应状态必须和Audit原子提交。unknown token没有可信Tenant归属，只计入去标识化platform metric，禁止信任请求提供的Tenant来伪造Tenant-scoped Audit。Pod UID只能保存SHA-256摘要。
+
 metrics按phase/failure category聚合；高频invalid token、workload mismatch、different-digest duplicate、跨release尝试触发告警。告警不得把秘密写入label。
 
 ## Console UX amendment

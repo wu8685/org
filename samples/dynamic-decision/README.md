@@ -78,3 +78,5 @@ Org SDK 从 typed Definition 生成 contract 并在启动时自动注册。Conso
 org 平台注入执行连接、候选 Pod identity 和一次性注册材料。用户不手填这些值，也不把 credential 或 routing 写进 image。
 
 用户只维护业务 Definition/Activities 和 image；Version 的发布字段由 org API 承接，详见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。Secret 或敏感 input 不得进入 projection、log 或 Audit。
+
+本地演示的 resource 可以从 `100m` CPU、`128Mi` memory 起步。production 应根据各分支 Activity 的实际 CPU、峰值内存和并发画像重新测量并设置 requests/limits；未执行的 `skipped` 分支不代表可以忽略被选分支的容量规划。

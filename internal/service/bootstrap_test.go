@@ -38,6 +38,14 @@ func TestBootstrapRegistrationFreezesContractAndReturnsExactRetryReceipt(t *test
 	if material.Token == "" || strings.Contains(mustJSON(t, store.BootstrapCredentials()), material.Token) {
 		t.Fatal("raw bootstrap token was missing or persisted")
 	}
+	tokenHash := sha256.Sum256([]byte(material.Token))
+	issuedAudits := mustJSON(t, store.Audits(version.TenantID))
+	if !strings.Contains(issuedAudits, `"action":"worker.bootstrap.credential.issued"`) || strings.Contains(issuedAudits, material.Token) || strings.Contains(issuedAudits, hex.EncodeToString(tokenHash[:])) {
+		t.Fatalf("credential issuance audit missing or leaked credential material: %s", issuedAudits)
+	}
+	if issued := store.Audits(version.TenantID)[0]; !issued.CreatedAt.Equal(now) {
+		t.Fatalf("credential issuance Audit time = %s, want issued time %s", issued.CreatedAt, now)
+	}
 	registration := bootstrapContract(t, version.Version)
 	evidence := BootstrapWorkloadEvidence{ObservedImage: version.Image, PodUID: "pod-1", AudienceVerified: true}
 	first, err := registry.Register(context.Background(), material.Token, evidence, registration)
@@ -59,8 +67,18 @@ func TestBootstrapRegistrationFreezesContractAndReturnsExactRetryReceipt(t *test
 		t.Fatalf("stored version = %#v", stored)
 	}
 	audits := store.Audits(version.TenantID)
-	if len(audits) == 0 || audits[len(audits)-1].Action != "worker.contract.register" || strings.Contains(mustJSON(t, audits), material.Token) {
+	actions := auditActions(audits)
+	for _, action := range []string{"worker.bootstrap.registration.received", "worker.bootstrap.registration.verified", "worker.bootstrap.credential.revoked", "worker.contract.register"} {
+		if !actions[action] {
+			t.Fatalf("bootstrap Audit missing %q: %#v", action, audits)
+		}
+	}
+	if strings.Contains(mustJSON(t, audits), material.Token) || strings.Contains(mustJSON(t, audits), hex.EncodeToString(tokenHash[:])) {
 		t.Fatalf("bootstrap audits = %#v", audits)
+	}
+	podUIDHash := sha256.Sum256([]byte(evidence.PodUID))
+	if strings.Contains(mustJSON(t, audits), evidence.PodUID) || !strings.Contains(mustJSON(t, audits), hex.EncodeToString(podUIDHash[:])) {
+		t.Fatalf("bootstrap Audits must retain only the Pod UID digest: %#v", audits)
 	}
 	registration.BuildID = "v2"
 	if _, err := registry.Register(context.Background(), material.Token, evidence, registration); !errors.Is(err, ErrBootstrapConflict) {
@@ -107,6 +125,12 @@ func TestBootstrapRegistrationRejectsExpiredOrWrongImageWithoutWritingContract(t
 	stored, _ = store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
 	if stored.ManifestDigest != "" || len(stored.Metadata.Workflows) != 0 {
 		t.Fatalf("rejected contract persisted: %#v", stored)
+	}
+	actions := auditActions(store.Audits(version.TenantID))
+	for _, action := range []string{"worker.bootstrap.registration.received", "worker.bootstrap.registration.rejected", "worker.bootstrap.credential.revoked"} {
+		if !actions[action] {
+			t.Fatalf("bootstrap rejection Audit missing %q: %#v", action, store.Audits(version.TenantID))
+		}
 	}
 }
 
@@ -194,6 +218,7 @@ func TestBootstrapAcceptancePersistenceFailureIsAtomicAndExactlyRetryable(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	issuedAuditCount := len(base.Audits(version.TenantID))
 	request := bootstrapContract(t, version.Version)
 	evidence := BootstrapWorkloadEvidence{PodUID: "pod-1", ServiceAccount: version.KubernetesServiceAccount, ObservedImage: version.Image, AudienceVerified: true}
 	if _, err := registry.Register(context.Background(), material.Token, evidence, request); !errors.Is(err, errInjectedBootstrapAcceptance) {
@@ -208,7 +233,7 @@ func TestBootstrapAcceptancePersistenceFailureIsAtomicAndExactlyRetryable(t *tes
 	if credential.AcceptedAt != nil || credential.ReceiptID != "" {
 		t.Fatalf("partial credential receipt persisted: %#v", credential)
 	}
-	if audits := base.Audits(version.TenantID); len(audits) != 0 {
+	if audits := base.Audits(version.TenantID); len(audits) != issuedAuditCount {
 		t.Fatalf("partial accepted Audit persisted: %#v", audits)
 	}
 
@@ -239,6 +264,7 @@ func TestFileStoreBootstrapAcceptancePersistenceFailureLeavesDurableStateRetryab
 	if err != nil {
 		t.Fatal(err)
 	}
+	issuedAuditCount := len(store.Audits(version.TenantID))
 	request := bootstrapContract(t, version.Version)
 	evidence := BootstrapWorkloadEvidence{PodUID: "pod-1", ServiceAccount: version.KubernetesServiceAccount, ObservedImage: version.Image, AudienceVerified: true}
 	injected := errors.New("injected durable acceptance failure")
@@ -257,7 +283,7 @@ func TestFileStoreBootstrapAcceptancePersistenceFailureLeavesDurableStateRetryab
 	}
 	hash := sha256.Sum256([]byte(material.Token))
 	credential, _ := reopened.BootstrapCredential(hex.EncodeToString(hash[:]))
-	if credential.AcceptedAt != nil || len(reopened.Audits(version.TenantID)) != 0 {
+	if credential.AcceptedAt != nil || len(reopened.Audits(version.TenantID)) != issuedAuditCount {
 		t.Fatalf("disk contains partial credential or audit: credential=%#v audits=%#v", credential, reopened.Audits(version.TenantID))
 	}
 
@@ -269,6 +295,54 @@ func TestFileStoreBootstrapAcceptancePersistenceFailureLeavesDurableStateRetryab
 	exact, err := retryRegistry.Register(context.Background(), material.Token, evidence, request)
 	if err != nil || !exact.ExactRetry || exact.ID != receipt.ID {
 		t.Fatalf("exact retry=%#v error=%v", exact, err)
+	}
+}
+
+func TestFileStoreBootstrapIssuanceAndRejectionAuditFailuresAreAtomic(t *testing.T) {
+	now := time.Date(2026, 8, 1, 13, 30, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "state.json")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := bootstrapPendingVersion(t)
+	if err := store.SaveWorkerVersion(version.TenantID, version); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewBootstrapRegistry(store, BootstrapRegistryConfig{Now: func() time.Time { return now }, Verifier: BootstrapWorkloadVerifierFunc(func(context.Context, domain.BootstrapBinding, BootstrapWorkloadEvidence) error { return errors.New("identity mismatch") })})
+	injected := errors.New("injected bootstrap Audit persistence failure")
+	store.persistSnapshot = func(fileState) error { return injected }
+	if _, err := registry.Issue(version, "generation-1"); !errors.Is(err, injected) {
+		t.Fatalf("Issue error = %v", err)
+	}
+	if len(store.BootstrapCredentials()) != 0 || len(store.Audits(version.TenantID)) != 0 {
+		t.Fatalf("failed issuance changed live state: credentials=%#v Audits=%#v", store.BootstrapCredentials(), store.Audits(version.TenantID))
+	}
+
+	store.persistSnapshot = nil
+	material, err := registry.Issue(version, "generation-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedAuditCount := len(store.Audits(version.TenantID))
+	store.persistSnapshot = func(fileState) error { return injected }
+	if _, err := registry.Register(context.Background(), material.Token, BootstrapWorkloadEvidence{ObservedImage: version.Image, PodUID: "pod-1"}, bootstrapContract(t, version.Version)); !errors.Is(err, injected) || !errors.Is(err, ErrBootstrapRejected) {
+		t.Fatalf("Register rejection error = %v", err)
+	}
+	hash := sha256.Sum256([]byte(material.Token))
+	credential, _ := store.BootstrapCredential(hex.EncodeToString(hash[:]))
+	storedVersion, _ := store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+	if credential.Revoked || storedVersion.RegistrationStatus == domain.BootstrapRegistrationRejected || len(store.Audits(version.TenantID)) != issuedAuditCount {
+		t.Fatalf("failed rejection changed live state: credential=%#v version=%#v Audits=%#v", credential, storedVersion, store.Audits(version.TenantID))
+	}
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, _ = reopened.BootstrapCredential(hex.EncodeToString(hash[:]))
+	storedVersion, _ = reopened.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
+	if credential.Revoked || storedVersion.RegistrationStatus == domain.BootstrapRegistrationRejected || len(reopened.Audits(version.TenantID)) != issuedAuditCount {
+		t.Fatalf("failed rejection changed durable state: credential=%#v version=%#v Audits=%#v", credential, storedVersion, reopened.Audits(version.TenantID))
 	}
 }
 
@@ -297,7 +371,7 @@ func TestBootstrapAcceptanceCASRejectsUnrelatedWorkerVersionMutation(t *testing.
 	acceptedCredential.AcceptedAt, acceptedCredential.ReceiptUntil, acceptedCredential.Revoked = &now, &receiptUntil, true
 	audit := domain.AuditRecord{ID: "audit-1", TenantID: version.TenantID, TenantSlug: version.TenantSlug, Action: "worker.contract.register", Permission: "bootstrap:register-contract", Outcome: "accepted", TargetType: "workerVersion", TargetID: version.ID}
 
-	if err := store.CommitBootstrapAcceptance(version.TenantID, acceptedVersion, acceptedCredential, audit); !errors.Is(err, ErrBootstrapRejected) {
+	if err := store.CommitBootstrapAcceptance(version.TenantID, acceptedVersion, acceptedCredential, []domain.AuditRecord{audit}); !errors.Is(err, ErrBootstrapRejected) {
 		t.Fatalf("CommitBootstrapAcceptance error = %v", err)
 	}
 	stored, _ := store.WorkerVersion(version.TenantID, version.WorkerName, version.Version)
@@ -313,14 +387,14 @@ type bootstrapAcceptanceFaultStore struct {
 	fail bool
 }
 
-func (s *bootstrapAcceptanceFaultStore) CommitBootstrapAcceptance(tenantID string, version domain.WorkerVersion, credential domain.BootstrapCredential, audit domain.AuditRecord) error {
+func (s *bootstrapAcceptanceFaultStore) CommitBootstrapAcceptance(tenantID string, version domain.WorkerVersion, credential domain.BootstrapCredential, audits []domain.AuditRecord) error {
 	if s.fail {
 		return errInjectedBootstrapAcceptance
 	}
 	if committer, ok := s.Store.(interface {
-		CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, domain.AuditRecord) error
+		CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, []domain.AuditRecord) error
 	}); ok {
-		return committer.CommitBootstrapAcceptance(tenantID, version, credential, audit)
+		return committer.CommitBootstrapAcceptance(tenantID, version, credential, audits)
 	}
 	return errors.New("atomic bootstrap acceptance is unavailable")
 }
@@ -351,4 +425,12 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(encoded)
+}
+
+func auditActions(audits []domain.AuditRecord) map[string]bool {
+	actions := make(map[string]bool, len(audits))
+	for _, audit := range audits {
+		actions[audit.Action] = true
+	}
+	return actions
 }

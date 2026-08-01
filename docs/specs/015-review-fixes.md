@@ -84,6 +84,10 @@ Start使用Workflow input schema，Signal/Query使用各自Operation input schem
 
 补齐bootstrap credential issuance、expiry/revocation、identity/contract rejection、registration accepted、poller/probe/promotion success/failure/retry Audit。Audit只含Tenant、Worker/version、operation/attempt/receipt ID、digest、Pod UID hash、phase/outcome/error class；不含token、workload token、Secret、完整manifest/input。
 
+credential issuance与其Audit同一次commit；已绑定credential的registration received、verified/rejected、revoke/consume及WorkerVersion registration状态也必须原子提交。unknown token没有可信Tenant binding，禁止从请求伪造Tenant来写Tenant Audit；它只进入不含token的platform aggregate metric。已验证Pod UID只以SHA-256摘要进入Audit。
+
+promotion继续使用`worker.version.promotion.<phase>`作为durable action；poller成功在`waiting-for-poller`记录`outcome=ready`，probe一致在`probing-contract`记录`outcome=verified`，controller恢复记录`outcome=retrying`，terminal failure记录`failedPhase`与安全error class，最终`promotion.succeeded`与Current变更原子提交。该phase/outcome组合等价承载012列出的poller/probe/promoted语义事件，避免同一次状态转移出现两套不一致Audit。
+
 parallel-confirmation与dynamic-decision README补建议CPU/memory，保留目录内独立路径并说明production需按Activity资源画像调整。docs tests钉住required input与resource values。
 
 ## 每阶段共同验收

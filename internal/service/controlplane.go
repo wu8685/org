@@ -157,7 +157,9 @@ type Store interface {
 	SaveBootstrapCredential(domain.BootstrapCredential) error
 	BootstrapCredential(string) (domain.BootstrapCredential, bool)
 	BootstrapCredentials() []domain.BootstrapCredential
-	CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, domain.AuditRecord) error
+	CommitBootstrapCredentialAudits(string, domain.BootstrapCredential, []domain.AuditRecord) error
+	CommitBootstrapRejection(string, domain.WorkerVersion, domain.BootstrapCredential, []domain.AuditRecord) error
+	CommitBootstrapAcceptance(string, domain.WorkerVersion, domain.BootstrapCredential, []domain.AuditRecord) error
 	CommitWorkerVersionAudit(string, domain.WorkerVersion, domain.AuditRecord) error
 }
 
@@ -258,6 +260,7 @@ func (c *ControlPlane) runBootstrapPromotionController(ctx context.Context, done
 			c.promotionMu.Unlock()
 			if promotionErr != nil && ctx.Err() == nil {
 				if version, err := c.bootstrapVersion(receipt); err == nil && version.State == domain.WorkerVersionPending {
+					_ = c.commitPromotionTransition(version, version.PromotionPhase, "retrying", classifyError(promotionErr))
 					retry := time.NewTimer(250 * time.Millisecond)
 					select {
 					case <-ctx.Done():
@@ -338,7 +341,8 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 		}
 		version = refreshed
 	}
-	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionWaiting); err != nil {
+	version, err = c.savePromotionPhase(version, domain.WorkerVersionPromotionWaiting)
+	if err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	if err := c.executor.WaitForPoller(ctx, version); err != nil {
@@ -346,7 +350,11 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 		return failed, cause
 	}
 	version.Health.WorkerPolling = true
-	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionProbing); err != nil {
+	if err := c.commitPromotionTransition(version, domain.WorkerVersionPromotionWaiting, "ready", ""); err != nil {
+		return domain.WorkerVersion{}, err
+	}
+	version, err = c.savePromotionPhase(version, domain.WorkerVersionPromotionProbing)
+	if err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	identity, err := c.executor.Probe(ctx, version)
@@ -358,7 +366,11 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 		failed, cause := c.failWorkerVersion(version.TenantID, version, err)
 		return failed, cause
 	}
-	if err := c.savePromotionPhase(version, domain.WorkerVersionPromotionSetting); err != nil {
+	if err := c.commitPromotionTransition(version, domain.WorkerVersionPromotionProbing, "verified", ""); err != nil {
+		return domain.WorkerVersion{}, err
+	}
+	version, err = c.savePromotionPhase(version, domain.WorkerVersionPromotionSetting)
+	if err != nil {
 		return domain.WorkerVersion{}, err
 	}
 	c.mu.Lock()
@@ -382,10 +394,10 @@ func (c *ControlPlane) PromoteBootstrap(ctx context.Context, receipt BootstrapRe
 	return version, nil
 }
 
-func (c *ControlPlane) savePromotionPhase(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase) error {
+func (c *ControlPlane) savePromotionPhase(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase) (domain.WorkerVersion, error) {
 	now := time.Now().UTC()
 	version.PromotionPhase, version.PromotionUpdatedAt, version.UpdatedAt = phase, &now, now
-	return c.commitPromotionTransition(version, phase, "in-progress", "")
+	return version, c.commitPromotionTransition(version, phase, "in-progress", "")
 }
 
 func (c *ControlPlane) commitPromotionTransition(version domain.WorkerVersion, phase domain.WorkerVersionPromotionPhase, outcome, errorClass string) error {
@@ -606,10 +618,13 @@ func validateRuntimeIdentity(version domain.WorkerVersion, identity RuntimeIdent
 
 func (c *ControlPlane) failWorkerVersion(tenantID string, d domain.WorkerVersion, cause error) (domain.WorkerVersion, error) {
 	now := time.Now().UTC()
+	failedPhase := d.PromotionPhase
 	d.State, d.Failure, d.UpdatedAt, d.DeploymentActive = domain.WorkerVersionFailed, cause.Error(), now, false
 	if d.RegistrationStatus == domain.BootstrapRegistrationAccepted {
 		d.PromotionPhase, d.PromotionUpdatedAt = domain.WorkerVersionPromotionFailed, &now
-		if err := c.commitPromotionTransition(d, domain.WorkerVersionPromotionFailed, "failed", classifyError(cause)); err != nil {
+		audit := c.promotionAudit(d, domain.WorkerVersionPromotionFailed, "failed", classifyError(cause))
+		audit.References["failedPhase"] = string(failedPhase)
+		if err := c.store.CommitWorkerVersionAudit(d.TenantID, d, audit); err != nil {
 			return d, errors.Join(cause, err)
 		}
 		return d, cause

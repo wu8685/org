@@ -82,3 +82,5 @@ Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册
 org 平台注入执行连接、候选 Pod identity 和一次性注册材料。用户不手填这些值，不创建 credential 文件，也不把它们写进 image。
 
 用户只维护业务 Definition/Activities 和 image；Version 的发布字段由 org API 承接，详见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。真实 write Activity 必须声明 stable idempotency key 或 reconciliation/compensation policy。
+
+本地演示的 resource 可以从 `100m` CPU、`128Mi` memory 起步。production 应根据两个并行 Activity 的并发数、峰值内存和实际耗时重新测量并设置 requests/limits，不要直接照搬示例值。

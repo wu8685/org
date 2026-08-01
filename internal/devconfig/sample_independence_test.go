@@ -202,6 +202,14 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	if !strings.Contains(parallel, `{"subject":"release notes"}`) {
 		t.Errorf("parallel-confirmation README must include required Workflow input")
 	}
+	for _, relative := range []string{"samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+		text := read(t, filepath.Join(root, relative))
+		for _, want := range []string{"100m", "128Mi", "production", "Activity"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing resource guidance %q", relative, want)
+			}
+		}
+	}
 }
 
 func TestApprovedDocsDoNotRetainRemovedSampleArtifactPaths(t *testing.T) {
