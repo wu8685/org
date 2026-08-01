@@ -2,11 +2,10 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +42,8 @@ type acceptanceRun struct {
 	images                              []sampleImage
 	invocations                         []trackedInvocation
 	cleanupOnce                         sync.Once
+	bootstrapServer                     *http.Server
+	bootstrapURL                        string
 }
 
 func newAcceptanceRun(t *testing.T, ctx context.Context) *acceptanceRun {
@@ -100,7 +101,15 @@ func (r *acceptanceRun) controlPlane() *service.ControlPlane {
 			r.t.Fatalf("save E2E tenant: %v", err)
 		}
 	}
-	r.control = service.New(service.Config{RegistryAllowlist: []string{"org.local"}}, r.store, cluster, executor)
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		r.t.Fatalf("listen bootstrap endpoint: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	r.bootstrapURL = fmt.Sprintf("http://127.0.0.1:%d/internal/v1/bootstrap/register", port)
+	r.control = service.New(service.Config{RegistryAllowlist: []string{"org.local"}, BootstrapEndpoint: fmt.Sprintf("http://host.docker.internal:%d/internal/v1/bootstrap/register", port), BootstrapVerifier: service.StrictBootstrapWorkloadVerifier{}}, r.store, cluster, executor)
+	r.bootstrapServer = &http.Server{Handler: service.NewBootstrapRegistrationHandler(r.control, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org"}, nil)), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = r.bootstrapServer.Serve(listener) }()
 	for suffix := range r.tenants {
 		if _, err := r.control.CreateWorker(r.ctx, r.auth(suffix), service.CreateWorkerRequest{WorkerName: r.workerName}); err != nil {
 			r.t.Fatalf("create E2E Worker: %v", err)
@@ -133,22 +142,8 @@ func (r *acceptanceRun) auth(suffix string) service.AuthenticatedContext {
 
 func (r *acceptanceRun) workerVersionRequest(image sampleImage) domain.WorkerVersionRequest {
 	r.t.Helper()
-	metadataBytes, err := os.ReadFile(filepath.Join(r.root, "samples", "hello", "generated", "org-worker-manifest.json"))
-	if err != nil {
-		r.t.Fatalf("read sample metadata: %v", err)
-	}
-	var metadata domain.WorkerMetadata
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
-		r.t.Fatalf("decode sample metadata: %v", err)
-	}
-	canonicalMetadata, err := json.Marshal(metadata)
-	if err != nil {
-		r.t.Fatalf("canonicalize sample manifest: %v", err)
-	}
-	digest := sha256.Sum256(canonicalMetadata)
 	return domain.WorkerVersionRequest{
 		WorkerName: r.workerName, Description: "Hello Worker release " + image.version + ".", Image: image.digestReference, Version: image.version,
-		ManifestDigest: "sha256:" + hex.EncodeToString(digest[:]), Metadata: metadata,
 		Runtime: domain.RuntimeSpec{CPU: "100m", Memory: "128Mi", ServiceAccount: "hello-worker"},
 		Source:  domain.SourceProvenance{Repository: "https://local.test/org/samples/hello", Branch: "e2e", Commit: image.commit, CIReference: "local-e2e-" + r.id},
 	}
@@ -158,10 +153,33 @@ func (r *acceptanceRun) trackInvocation(auth service.AuthenticatedContext, id st
 	r.invocations = append(r.invocations, trackedInvocation{auth: auth, id: id})
 }
 
+func (r *acceptanceRun) waitForReadyVersion(auth service.AuthenticatedContext, workerName, version string) domain.WorkerVersion {
+	r.t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		candidate, ok := r.store.WorkerVersion(auth.TenantID, workerName, version)
+		if ok && candidate.State == domain.WorkerVersionReady {
+			return candidate
+		}
+		if ok && candidate.State == domain.WorkerVersionFailed {
+			r.t.Fatalf("WorkerVersion failed: %s", candidate.Failure)
+		}
+		select {
+		case <-r.ctx.Done():
+			r.t.Fatalf("wait for WorkerVersion ready: %v", r.ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func (r *acceptanceRun) cleanup() {
 	r.cleanupOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		if r.bootstrapServer != nil {
+			_ = r.bootstrapServer.Shutdown(ctx)
+		}
 		if r.control != nil {
 			for _, invocation := range r.invocations {
 				_ = r.control.Cancel(ctx, invocation.auth, invocation.id)
@@ -261,9 +279,6 @@ func requireEnvironment(t *testing.T, ctx context.Context, root string) {
 		if _, err := exec.LookPath(command); err != nil {
 			t.Fatalf("E2E prerequisite %s: %v", command, err)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "samples", "hello", "generated", "org-worker-manifest.json")); err != nil {
-		t.Fatalf("E2E sample contract: %v", err)
 	}
 	runChecked(t, ctx, "docker", "info")
 	clusters := runChecked(t, ctx, "kind", "get", "clusters")

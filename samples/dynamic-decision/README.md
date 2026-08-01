@@ -17,14 +17,12 @@ Workflow 不能直接访问外部服务。`DetermineRoute` 是 Activity，它的
 
 - [`definition.go`](definition.go)：typed Definition、recorded route、selected/skip/finalize。
 - [`activities.go`](activities.go)：四个无外部副作用的业务 Activity。
-- [`generated/org-worker-manifest.json`](generated/org-worker-manifest.json)：由 Definition 生成的只读 contract，不应手工编辑。
 
 Sample 不 import raw Temporal SDK，不手写 projection、Signal 或 metadata。UI/调用方只消费 SDK dynamic projection，不从 Temporal Event History 推断路径。
 
 ```sh
 cd samples/dynamic-decision
 go test ./...
-go run ./cmd/generate-manifest
 ```
 
 ## 两条运行结果
@@ -51,7 +49,9 @@ make dynamic-sample-kind-load \
   SAMPLE_COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-命令从仓库根构建 Sample image，加载到 `kind-org` 并输出 immutable `IMAGE_DIGEST`。org 控制面只接收 image digest、generated manifest、版本级 description、runtime config 与 source provenance，不代建或发布用户镜像。
+命令从仓库根构建 Sample image，加载到 `kind-org` 并输出 immutable `IMAGE_DIGEST`。org 控制面只接收 image digest、版本级 description、runtime config 与 source provenance，不代建或发布用户镜像。Org SDK 在候选 Pod 启动时自动注册只读 contract；不需要 image 内 manifest 或 Console 上传。
+
+生产环境由用户 CI build/push，并从 registry push 结果保存 `image@sha256:...`。在 Console 创建 `dynamic-decision-worker` 的 WorkerVersion 时提交该 digest；不要提交 `latest` 或版本 tag。
 
 kind Pod 的 `TEMPORAL_ADDRESS` 使用 Pod 可达的 endpoint（本地通常为 `host.docker.internal:7233`），不能硬编码 `127.0.0.1`。Task Queue、Worker Deployment、Workflow ID 和 Kubernetes workload name 由服务端根据 Tenant + Worker name 派生。
 

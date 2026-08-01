@@ -20,12 +20,9 @@ func TestGeneratedManifestMatchesRouteAndCandidateContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile("generated/org-worker-manifest.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(bytes.TrimSpace(got), want) {
-		t.Fatalf("generated manifest is stale; run go run ./cmd/generate-manifest\ndigest=%s", digest)
+	got, gotDigest, err := worker.Manifest()
+	if err != nil || !bytes.Equal(got, want) || gotDigest != digest {
+		t.Fatalf("in-memory contract is not canonical: digest=%s second=%s error=%v", digest, gotDigest, err)
 	}
 	var manifest orgsdk.Manifest
 	if err := json.Unmarshal(got, &manifest); err != nil {

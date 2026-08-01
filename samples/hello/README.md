@@ -27,16 +27,15 @@ make sample-test
 
 两个 Activity 都声明为 `sideEffect: none`。真实 write Activity 必须改为 `sideEffect: write`，并通过 Org SDK 声明和传播 stable idempotency key，或声明 reconciliation policy；这不等于外部效果 exactly once。
 
-## 2. Generated contract
+## 2. SDK 自动注册 contract
 
-[`generated/org-worker-manifest.json`](generated/org-worker-manifest.json) 由同一份 typed Definition 生成，不应手工编辑：
+Worker 启动时调用 Org SDK hosted entrypoint。SDK 从 typed Definition 在内存中生成 canonical contract/digest，使用平台注入的短期 credential 注册；收到 `accepted` 后才开始 Temporal polling。
 
 ```sh
-cd samples/hello
-go run ./cmd/generate-manifest
+make sample-test
 ```
 
-命令同时输出 `MANIFEST_DIGEST=sha256:...`。注册 WorkerVersion 时提交该 manifest 与 digest；manifest 不重复 Tenant、Worker name 或版本级 description。
+不需要把 manifest 放进 image，也不需要在 API/Console 上传。`cmd/generate-manifest` 仅保留为可选的 CI/debug 审计工具，不是发布输入。
 
 ## 3. 构建并加载到 kind
 
@@ -57,6 +56,8 @@ IMAGE_DIGEST=org.local/hello-worker@sha256:<digest>
 
 注册时必须使用 `IMAGE_DIGEST`，不能使用可变 tag。本地流程不 push registry。
 
+生产发布由用户自己的 CI build/push。让 CI 保存 registry 返回的 digest，并组装 `registry.example.com/team/hello@sha256:...`；Console 只接受这个不可变 reference。不要从本地 tag 文本推测 digest。
+
 ## 4. 由 org 注册、启动和读取 projection
 
 WorkerVersion 注册请求包含：
@@ -64,7 +65,6 @@ WorkerVersion 注册请求包含：
 - `workerName: hello-worker`；
 - 版本级 `description`；
 - OCI image digest；
-- generated manifest 与 `MANIFEST_DIGEST`；
 - version、runtime resources 与 source provenance。
 
 触发语义是 `hello-worker` 下启动 `HelloWorkflow`；未指定版本时使用 Current，显式历史版本使用 Pinned override。读取 Run 时使用 SDK 的 semantic projection；不要从 Temporal Event History 推断 DAG。

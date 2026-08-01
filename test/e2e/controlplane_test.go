@@ -1,7 +1,9 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/wu8685/org/internal/console"
 	"github.com/wu8685/org/internal/domain"
+	"github.com/wu8685/org/internal/platform/kube"
 	"github.com/wu8685/org/internal/service"
 )
 
@@ -35,18 +38,22 @@ func TestLocalControlPlaneAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy version A: %v", err)
 	}
+	deploymentA = run.waitForReadyVersion(authA, run.workerName, versionA.version)
 	assertReadyDeployment(t, deploymentA, versionA)
+	verifyBootstrapRetryAndRejections(t, run, deploymentA)
 
 	deploymentB, err := controlPlane.PublishVersion(ctx, authA, run.workerVersionRequest(versionB))
 	if err != nil {
 		t.Fatalf("deploy version B: %v", err)
 	}
+	deploymentB = run.waitForReadyVersion(authA, run.workerName, versionB.version)
 	assertReadyDeployment(t, deploymentB, versionB)
 
 	tenantBDeployment, err := controlPlane.PublishVersion(ctx, authB, run.workerVersionRequest(versionA))
 	if err != nil {
 		t.Fatalf("deploy same workerName/version for Tenant B: %v", err)
 	}
+	tenantBDeployment = run.waitForReadyVersion(authB, run.workerName, versionA.version)
 	assertReadyDeployment(t, tenantBDeployment, versionA)
 	if deploymentA.TaskQueue == tenantBDeployment.TaskQueue || deploymentA.WorkerDeployment == tenantBDeployment.WorkerDeployment || deploymentA.KubernetesDeployment == tenantBDeployment.KubernetesDeployment {
 		t.Fatalf("Tenant runtime names collided: A=%+v B=%+v", deploymentA, tenantBDeployment)
@@ -87,6 +94,54 @@ func TestLocalControlPlaneAcceptance(t *testing.T) {
 	}
 	if len(run.store.WorkerVersions(run.tenants["a"].ID, run.workerName)) != 2 || len(run.store.WorkerVersions(run.tenants["b"].ID, run.workerName)) != 1 {
 		t.Fatalf("tenant-qualified deployment store mismatch")
+	}
+}
+
+func verifyBootstrapRetryAndRejections(t *testing.T, run *acceptanceRun, version domain.WorkerVersion) {
+	t.Helper()
+	pod := strings.TrimSpace(runChecked(t, run.ctx, "kubectl", "--context", "kind-org", "-n", run.kubeNamespace, "get", "pod", "-l", "org.wu8685.dev/version="+version.VersionHash, "-o", "jsonpath={.items[0].metadata.name}"))
+	podUID := strings.TrimSpace(runChecked(t, run.ctx, "kubectl", "--context", "kind-org", "-n", run.kubeNamespace, "get", "pod", pod, "-o", "jsonpath={.metadata.uid}"))
+	encodedCredential := strings.TrimSpace(runChecked(t, run.ctx, "kubectl", "--context", "kind-org", "-n", run.kubeNamespace, "get", "secret", "-l", "org.wu8685.dev/version="+version.VersionHash, "-o", "jsonpath={.items[0].data.credential}"))
+	credential, err := base64.StdEncoding.DecodeString(encodedCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workloadToken := strings.TrimSpace(runChecked(t, run.ctx, "kubectl", "--context", "kind-org", "-n", run.kubeNamespace, "create", "token", version.KubernetesServiceAccount, "--audience=org-worker-bootstrap", "--duration=10m", "--bound-object-kind=Pod", "--bound-object-name="+pod, "--bound-object-uid="+podUID))
+	body, _ := json.Marshal(map[string]any{"manifestDigest": version.ManifestDigest, "contract": version.Metadata, "buildId": version.Version})
+	request, _ := http.NewRequestWithContext(run.ctx, http.MethodPost, run.bootstrapURL, bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+string(credential))
+	request.Header.Set("X-Org-Workload-Token", workloadToken)
+	request.Header.Set("X-Org-Pod-UID", podUID)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("exact bootstrap retry status = %d", response.StatusCode)
+	}
+	request, _ = http.NewRequestWithContext(run.ctx, http.MethodPost, run.bootstrapURL, bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+string(credential))
+	request.Header.Set("X-Org-Workload-Token", "forged")
+	request.Header.Set("X-Org-Pod-UID", podUID)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("forged workload identity status = %d", response.StatusCode)
+	}
+	evidenceRequest := httptest.NewRequest(http.MethodPost, "/", nil)
+	evidenceRequest.Header.Set("X-Org-Workload-Token", workloadToken)
+	evidenceRequest.Header.Set("X-Org-Pod-UID", podUID)
+	evidence, err := kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: run.kubeNamespace, Context: "kind-org"}, nil).ResolveBootstrapEvidence(evidenceRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := domain.BootstrapBinding{ExpectedImage: "org.local/hello-worker@sha256:" + strings.Repeat("f", 64), ExpectedServiceAccount: version.KubernetesServiceAccount}
+	if err := (service.StrictBootstrapWorkloadVerifier{}).VerifyBootstrapWorkload(run.ctx, wrong, evidence); err == nil {
+		t.Fatal("mismatched expected image was accepted")
 	}
 }
 

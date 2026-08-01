@@ -12,29 +12,17 @@ import (
 )
 
 func main() {
-	cfg, err := parallelconfirmation.LoadConfig(os.Getenv)
+	cfg, err := orgsdk.LoadHostedWorkerConfig(os.Getenv, os.ReadFile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	worker, err := parallelconfirmation.NewWorker(cfg.TemporalWorkerBuildID)
-	if err != nil {
-		log.Fatal(err)
-	}
-	_, manifestDigest, err := worker.Manifest()
-	if err != nil {
-		log.Fatal(err)
-	}
-	runtime, err := orgsdk.NewWorkerRuntime(orgsdk.WorkerConfig{
-		TemporalAddress: cfg.TemporalAddress, TemporalNamespace: cfg.TemporalNamespace,
-		TaskQueue: cfg.TemporalTaskQueue, DeploymentName: cfg.TemporalWorkerDeployment,
-		BuildID: cfg.TemporalWorkerBuildID, ManifestDigest: manifestDigest,
-	}, worker.Registrations()...)
+	worker, err := parallelconfirmation.NewWorker(cfg.Worker.BuildID)
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runtime.Run(ctx); err != nil {
+	if err := orgsdk.RunHostedWorker(ctx, cfg, worker.Registrations()...); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -39,10 +39,13 @@ func TestKindAndTemporalBootstrapFilesMatchRuntimeDefaults(t *testing.T) {
 			t.Errorf("Makefile missing %q", want)
 		}
 	}
-	for _, want := range []string{"kind-org", "127.0.0.1", "7233", "samples/hello/generated/org-worker-manifest.json", "samples/parallel-confirmation/generated/org-worker-manifest.json", "samples/dynamic-decision/generated/org-worker-manifest.json"} {
+	for _, want := range []string{"kind-org", "127.0.0.1", "7233", "samples/hello/Dockerfile", "samples/parallel-confirmation/Dockerfile", "samples/dynamic-decision/Dockerfile"} {
 		if !strings.Contains(preflight, want) {
 			t.Errorf("preflight missing %q", want)
 		}
+	}
+	if strings.Contains(preflight, "generated/org-worker-manifest.json") {
+		t.Fatal("E2E preflight still requires generated manifest files")
 	}
 	for _, want := range []string{"RUN_ID", "org-e2e-", "hello-worker:e2e-"} {
 		if !strings.Contains(cleanup, want) {
@@ -56,6 +59,16 @@ func TestKindAndTemporalBootstrapFilesMatchRuntimeDefaults(t *testing.T) {
 	}
 	if strings.Contains(guide, "still needs the `kind` CLI/cluster") {
 		t.Error("development guide contains stale local prerequisite status")
+	}
+}
+
+func TestSamplesUseHostedBootstrapStartupWithoutManifestFiles(t *testing.T) {
+	for _, sample := range []string{"hello", "parallel-confirmation", "dynamic-decision"} {
+		path := filepath.Join("..", "..", "samples", sample, "cmd", "worker", "main.go")
+		text := read(t, path)
+		if !strings.Contains(text, "LoadHostedWorkerConfig") || !strings.Contains(text, "RunHostedWorker") || strings.Contains(text, ".Manifest()") || strings.Contains(text, "NewWorkerRuntime") {
+			t.Fatalf("sample %s has stale startup path:\n%s", sample, text)
+		}
 	}
 }
 

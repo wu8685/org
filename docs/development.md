@@ -32,6 +32,7 @@ On Docker Desktop, kind Pods reach the host service through `host.docker.interna
 |---|---|---|
 | `ORG_TEMPORAL_ADDRESS` | `127.0.0.1:7233` | Host-side control-plane connection |
 | `ORG_WORKER_TEMPORAL_ADDRESS` | `host.docker.internal:7233` | Address injected into Worker Pods |
+| `ORG_WORKER_BOOTSTRAP_ENDPOINT` | `http://host.docker.internal:8090/internal/v1/bootstrap/register` | Internal endpoint reachable from kind Pods; production uses TLS |
 | `ORG_TEMPORAL_NAMESPACE` | `default` | Shared platform Temporal Namespace used internally |
 | `ORG_TEMPORAL_WEB_URL` | `http://127.0.0.1:8080` | Advanced diagnostics deep-link base |
 | `ORG_KUBE_CONTEXT` | `kind-org` | Configurable Kubernetes context |
@@ -55,11 +56,11 @@ The bundled executable is deliberately a loopback-only development entrypoint. T
 ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 ```
 
-Open `http://127.0.0.1:8090`. The sidebar contains only 总览, Workers, Workflows and Runs. Generated Org SDK manifests are selected as files and shown read-only; runtime DAGs come from validated semantic projection; node actions go through the Gateway action API.
+Open `http://127.0.0.1:8090`. The sidebar contains only 总览, Workers, Workflows and Runs. A candidate Worker registers its Org SDK contract automatically during startup; Console only shows registration/probe status and the resulting read-only contract. Runtime DAGs come from validated semantic projection; node actions go through the Gateway action API.
 
 ## Image boundary
 
-`org` does not build or publish Worker images. A deployment receives an already-published OCI reference pinned by `sha256` digest, Worker metadata, runtime references, and source provenance. Source repository fields are audit data only; the control plane does not clone them.
+`org` does not build or publish Worker images. A publish request receives an already-published OCI reference pinned by `sha256` digest, version description, runtime references and source provenance. The deployed Org SDK registers the generated contract automatically; Console does not accept manifest uploads. Source repository fields are audit data only; the control plane does not clone them.
 
 ## Verification
 
@@ -82,7 +83,7 @@ make parallel-e2e-local
 make dynamic-e2e-local
 ```
 
-`e2e-preflight` is read-only. It hard-fails unless Docker, `kind-org`, a Ready Kubernetes node, Temporal at `127.0.0.1:7233`, and all three generated sample contracts are available.
+`e2e-preflight` is read-only. It hard-fails unless Docker, `kind-org`, a Ready Kubernetes node, Temporal at `127.0.0.1:7233`, and all three Sample Dockerfiles are available. Generated manifest files are not a runtime prerequisite.
 
 `e2e-local` uses Hello and then:
 

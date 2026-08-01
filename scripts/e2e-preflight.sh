@@ -25,24 +25,12 @@ nc -z 127.0.0.1 7233 || {
 	exit 1
 }
 
-test -f "$repo_root/samples/hello/generated/org-worker-manifest.json" || {
-	echo "missing samples/hello/generated/org-worker-manifest.json" >&2
-	exit 1
-}
 test -f "$repo_root/samples/hello/Dockerfile" || {
 	echo "missing samples/hello/Dockerfile" >&2
 	exit 1
 }
-test -f "$repo_root/samples/parallel-confirmation/generated/org-worker-manifest.json" || {
-	echo "missing samples/parallel-confirmation/generated/org-worker-manifest.json" >&2
-	exit 1
-}
 test -f "$repo_root/samples/parallel-confirmation/Dockerfile" || {
 	echo "missing samples/parallel-confirmation/Dockerfile" >&2
-	exit 1
-}
-test -f "$repo_root/samples/dynamic-decision/generated/org-worker-manifest.json" || {
-	echo "missing samples/dynamic-decision/generated/org-worker-manifest.json" >&2
 	exit 1
 }
 test -f "$repo_root/samples/dynamic-decision/Dockerfile" || {
@@ -50,4 +38,4 @@ test -f "$repo_root/samples/dynamic-decision/Dockerfile" || {
 	exit 1
 }
 
-echo "E2E prerequisites ready: Temporal 127.0.0.1:7233, Kubernetes kind-org, sample contract present"
+echo "E2E prerequisites ready: Temporal 127.0.0.1:7233, Kubernetes kind-org, Sample Dockerfiles present"

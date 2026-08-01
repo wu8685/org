@@ -2,15 +2,12 @@ package e2e_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -45,6 +42,7 @@ func TestLocalParallelConfirmationAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deploy parallel confirmation version: %v", err)
 	}
+	deployment = run.waitForReadyVersion(auth, run.workerName, image.version)
 	assertReadyDeployment(t, deployment, image)
 
 	invocation, err := controlPlane.Start(ctx, auth, service.StartRequest{
@@ -129,22 +127,9 @@ func (r *acceptanceRun) buildAndLoadParallelSample(suffix string) sampleImage {
 
 func (r *acceptanceRun) parallelWorkerVersionRequest(image sampleImage) domain.WorkerVersionRequest {
 	r.t.Helper()
-	manifestBytes, err := os.ReadFile(filepath.Join(r.root, "samples", "parallel-confirmation", "generated", "org-worker-manifest.json"))
-	if err != nil {
-		r.t.Fatalf("read parallel sample manifest: %v", err)
-	}
-	var metadata domain.WorkerMetadata
-	if err := json.Unmarshal(manifestBytes, &metadata); err != nil {
-		r.t.Fatalf("decode parallel sample manifest: %v", err)
-	}
-	canonical, err := json.Marshal(metadata)
-	if err != nil {
-		r.t.Fatalf("canonicalize parallel sample manifest: %v", err)
-	}
-	digest := sha256.Sum256(canonical)
 	return domain.WorkerVersionRequest{
 		WorkerName: r.workerName, Description: "Parallel confirmation release " + image.version + ".",
-		Image: image.digestReference, Version: image.version, ManifestDigest: "sha256:" + hex.EncodeToString(digest[:]), Metadata: metadata,
+		Image: image.digestReference, Version: image.version,
 		Runtime: domain.RuntimeSpec{CPU: "100m", Memory: "128Mi", ServiceAccount: "parallel-confirmation-worker"},
 		Source:  domain.SourceProvenance{Repository: "https://local.test/org/samples/parallel-confirmation", Branch: "e2e", Commit: image.commit, CIReference: "local-e2e-" + r.id},
 	}

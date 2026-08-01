@@ -15,14 +15,12 @@ approval-gate → build-plan → execute summary ─┐
 
 - [`definition.go`](definition.go)：typed Definition、`AwaitConfirmation`、runtime fork/join。
 - [`activities.go`](activities.go)：无外部副作用的 plan、branch 与 finalize 逻辑。
-- [`generated/org-worker-manifest.json`](generated/org-worker-manifest.json)：由 Definition 生成的只读 contract，不应手工编辑。
 
 Sample 不 import raw Temporal SDK，不手写 Signal、projection 或 metadata。Org SDK 负责 stable runtime node/Activity ID、Pinned Workflow registration、action envelope、dynamic projection 与 canonical manifest。
 
 ```sh
 cd samples/parallel-confirmation
 go test ./...
-go run ./cmd/generate-manifest
 ```
 
 ## Projection 与受控确认
@@ -41,7 +39,9 @@ make parallel-sample-kind-load \
   SAMPLE_COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-命令从仓库根构建 Sample image，并输出 immutable `IMAGE_DIGEST`。org 只接收 image digest、generated manifest、版本级 description、runtime resources 和 source provenance；控制面不为用户构建或发布镜像。
+命令从仓库根构建 Sample image，并输出 immutable `IMAGE_DIGEST`。org 只接收 image digest、版本级 description、runtime resources 和 source provenance；控制面不为用户构建或发布镜像。候选 Pod 使用 Org SDK 自动注册只读 contract，用户不管理 image 内 manifest，也不在 Console 上传。
+
+生产环境由用户 CI build/push，并从 registry push 结果保存 `image@sha256:...`。在 Console 创建 `parallel-confirmation-worker` 的 WorkerVersion 时提交该 digest；tag 只用于构建可读性，不能作为发布输入。
 
 kind Pod 的 `TEMPORAL_ADDRESS` 必须使用 Pod 可达地址；本地通常是 `host.docker.internal:7233`，不能硬编码 `127.0.0.1`。`TEMPORAL_TASK_QUEUE` 与 `TEMPORAL_WORKER_DEPLOYMENT` 由服务端从 Tenant + Worker name 派生。
 
