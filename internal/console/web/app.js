@@ -126,7 +126,7 @@
   async function renderWorkers() {
     const {items} = await api("/api/v1/workers");
     clear(content); clear(actions);
-    actions.append(button("创建 Worker", createWorker));
+    actions.append(button("创建 Worker", openWorkerDialog));
     if (!items.length) return content.append(empty("当前 Tenant 还没有 Worker。"));
     content.append(table(["Worker", "Current", "Created"], items.map(worker => [
       link(worker.workerName || worker.name, `/workers/${encodeURIComponent(worker.workerName || worker.name)}`),
@@ -135,12 +135,40 @@
     ])));
   }
 
-  async function createWorker() {
-    const workerName = window.prompt("Worker name");
-    if (!workerName) return;
-    await api("/api/v1/workers", {method: "POST", body: JSON.stringify({workerName})});
-    location.href = `/workers/${encodeURIComponent(workerName)}`;
+  const workerDialog = document.querySelector("[data-worker-dialog]");
+  const workerForm = document.querySelector("[data-worker-form]");
+  const workerName = workerForm.elements.workerName;
+  const workerError = document.querySelector("[data-worker-error]");
+  let workerDialogTrigger = null;
+  function clearWorkerError() {
+    workerError.textContent = "";
+    workerError.hidden = true;
+    workerName.removeAttribute("aria-invalid");
   }
+  function openWorkerDialog() {
+    workerDialogTrigger = document.activeElement;
+    workerForm.reset();
+    clearWorkerError();
+    workerDialog.showModal();
+    workerName.focus();
+  }
+  workerName.addEventListener("input", clearWorkerError);
+  workerDialog.addEventListener("close", () => workerDialogTrigger?.focus());
+  workerForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!workerForm.reportValidity()) return;
+    try {
+      const name = workerName.value;
+      await api("/api/v1/workers", {method: "POST", body: JSON.stringify({workerName: name})});
+      workerDialog.close();
+      location.href = `/workers/${encodeURIComponent(name)}`;
+    } catch (error) {
+      workerError.textContent = error.message || "Worker 创建失败。";
+      workerError.hidden = false;
+      workerName.setAttribute("aria-invalid", "true");
+      workerName.focus();
+    }
+  });
 
   async function renderWorker() {
     const workerName = segments[1];
@@ -318,7 +346,6 @@
       const bodyValue = {
         version: publishForm.elements.version.value, description: publishForm.elements.description.value, image: publishForm.elements.image.value,
         versionConfig: JSON.parse(publishForm.elements.versionConfig.value), runtime: {cpu: publishForm.elements.cpu.value, memory: publishForm.elements.memory.value},
-        source: {repository: publishForm.elements.repository.value, branch: publishForm.elements.branch.value, commit: publishForm.elements.commit.value, ciReference: publishForm.elements.ciReference.value},
       };
       if (!publishOperationKey) publishOperationKey = crypto.randomUUID();
       const result = await api(`/api/v1/workers/${encodeURIComponent(publishWorker)}/versions`, {

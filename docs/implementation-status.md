@@ -22,7 +22,7 @@ Implemented and covered by tests:
 - Workflow-owned dynamic if/else, fan-out/join, `skipped` nodes, stable dependencies and runtime bounds; the control plane validates projection rather than reconstructing it from Temporal Event History;
 - Workflow-internal durable `WaitForAction` / `AwaitConfirmation`, plus the control-plane action Gateway for Tenant authorization, schema validation, operation deduplication, delivery-unknown, Workflow outcome reconciliation and audit;
 - opt-in real local control-plane E2E using Temporal at `127.0.0.1:7233`, Kubernetes context `kind-org`, and digest-pinned Org SDK Samples;
-- real A/B acceptance for Kubernetes readiness, Worker polling, Current routing, semantic projection, explicit historical pinned routing, provenance, independent invocation IDs, downstream effects, and resource cleanup.
+- real A/B acceptance for Kubernetes readiness, Worker polling, Current routing, semantic projection, explicit historical pinned routing, immutable image identity, independent invocation IDs, downstream effects, and resource cleanup.
 - `samples/hello`: minimal sequential typed Workflow, migrated off raw Temporal authoring;
 - `samples/parallel-confirmation`: idle approval gate, authorized action, dynamic two-branch fork/join, Worker restart and action reconciliation;
 - `samples/dynamic-decision`: recorded Activity result selects one branch, exposes the unselected candidate as `skipped`, and converges at finalize.

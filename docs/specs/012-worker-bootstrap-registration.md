@@ -17,8 +17,9 @@ authenticated Tenant + route workerName
 version + description
 immutable OCI image digest
 versionConfig + runtime resources/Secret references
-source provenance
 ```
+
+2026-08-02批准的公开输入修订：publish API/UI不再接受`source`、repository、branch、commit或CI reference。可信审计主体、request ID、镜像观测身份等metadata由服务端产生；既有WorkerVersion已保存的source字段只为读取兼容保留，不得由新publish覆盖。
 
 用户不提交、上传或编辑 SDK manifest。org 创建 pending release，部署候选 Pod，并注入一个短生命周期、单用途、服务端绑定到确切 Tenant + Worker + WorkerVersion + expected image digest 的 bootstrap credential。Org SDK startup 从用户已编译进 Worker 的 typed Definition 在内存中构造 canonical manifest/digest，向内部 registration endpoint 自注册。control plane 验证 credential、Pod/image identity、contract 与 SDK protocol 后保存只读 contract，再通过既有 Worker poller + pinned contract verification 做 promotion gate。
 
@@ -130,12 +131,6 @@ Content-Type: application/json
     "cpu": "100m",
     "memory": "128Mi",
     "environment": []
-  },
-  "source": {
-    "repository": "https://...",
-    "branch": "main",
-    "commit": "...",
-    "ciReference": "..."
   }
 }
 ```
@@ -143,6 +138,7 @@ Content-Type: application/json
 请求使用 authenticated principal 派生 Tenant；`workerName` 只来自 tenant-scoped route lookup。body 必须拒绝：
 
 - `tenantId`、`tenantSlug`、`scope`、重复 `workerName`；
+- `source`、repository、branch、commit、CI reference及其aliases；
 - manifest、metadata、projection、contract、manifest digest；
 - Task Queue、Worker Deployment、Workflow ID、Kubernetes workload name；
 - bootstrap endpoint、credential、Pod UID、Build ID 或 SDK protocol override。
@@ -172,7 +168,7 @@ Location: /api/v1/operations/pub-...
 
 - `Idempotency-Key`是publish必填header，必须为1–200个visible ASCII字符（`!`–`~`，不含空格）；不得写入log或Audit原文，ledger只保存其hash。
 - reservation作用域是authenticated `{tenantID, principalID, keyHash}`。同Tenant的另一principal或另一Tenant使用同一header值，不共享operation。
-- canonical payload digest包含route中的`workerName`以及规范化后的version、description、immutable image、versionConfig、runtime与source；JSON object字段顺序和无意义空白不影响digest。CSRF token、request ID和credential不进入digest。
+- canonical payload digest包含route中的`workerName`以及规范化后的version、description、immutable image、versionConfig与runtime；JSON object字段顺序和无意义空白不影响digest。CSRF token、request ID、server-derived metadata和credential不进入digest。
 - reservation必须在启动异步publish前durable保存并原子判定：同scope + 同digest返回原`202`、`Location`和operation，不再次调用publish/deploy；同scope + 不同digest返回`409 conflict`。
 - new、replay与payload conflict都写Tenant-scoped Audit，只记录operation ID、payload digest与idempotency key hash等非秘密引用。
 - terminal reservation默认保留24小时并可配置；running reservation不因retention到期而回收。terminal记录过期后可lazy cleanup并允许key重新reservation，但相同Worker/version仍受immutable release conflict约束。
@@ -188,7 +184,8 @@ workerName
 WorkerVersion record ID + public version
 expected immutable OCI digest
 server-derived canonical routing names
-versionConfig/runtime/provenance digests
+versionConfig/runtime digests
+server-derived audit and image-observation references
 publish operation ID
 registration deadline
 ```
@@ -345,7 +342,7 @@ control plane必须区分publish-time registry media-type validation与runtime P
 - same receipt exact retry不改变revision；
 - 不允许 UI、user API、Worker restart、new Pod 或 description PATCH修改 contract；
 - description仍可按 WorkerVersion revision/If-Match独立更新；
-- image/runtime/versionConfig/source/Build ID变化必须创建新 WorkerVersion；
+- image/runtime/versionConfig/Build ID变化必须创建新 WorkerVersion；旧记录的source兼容字段不提供更新入口；
 - probe返回的 digest、protocol、capabilities、Build ID必须与registration record逐项相等；
 - mismatch使release失败/隔离，不允许“warning但Ready”；
 - failed release不可被重新注册为另一个 contract；用户修复后发布新version。

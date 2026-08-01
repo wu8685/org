@@ -34,12 +34,14 @@ type Config struct {
 }
 
 var (
-	ErrUnauthenticated     = errors.New("unauthenticated")
-	ErrPermissionDenied    = errors.New("permission_denied")
-	ErrNotFound            = errors.New("not_found")
-	ErrTenantSuspended     = errors.New("tenant_suspended")
-	ErrTenantQuotaExceeded = errors.New("tenant_quota_exceeded")
-	ErrConflict            = errors.New("conflict")
+	ErrUnauthenticated            = errors.New("unauthenticated")
+	ErrPermissionDenied           = errors.New("permission_denied")
+	ErrNotFound                   = errors.New("not_found")
+	ErrTenantSuspended            = errors.New("tenant_suspended")
+	ErrTenantQuotaExceeded        = errors.New("tenant_quota_exceeded")
+	ErrConflict                   = errors.New("conflict")
+	ErrWorkerVersionExists        = fmt.Errorf("%w: worker version already exists", ErrConflict)
+	ErrPublishIdempotencyConflict = fmt.Errorf("%w: idempotency key was already used with a different publish request", ErrConflict)
 )
 
 const (
@@ -491,7 +493,7 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 	}
 	for _, existing := range c.store.WorkerVersions(tenant.ID, req.WorkerName) {
 		if existing.Version == req.Version {
-			return domain.WorkerVersion{}, ErrConflict
+			return domain.WorkerVersion{}, ErrWorkerVersionExists
 		}
 	}
 	id := newID("ver")

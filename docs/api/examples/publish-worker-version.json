@@ -7,11 +7,5 @@
     "cpu": "100m",
     "memory": "128Mi",
     "environment": []
-  },
-  "source": {
-    "repository": "https://github.com/example/worker",
-    "branch": "main",
-    "commit": "000000000000",
-    "ciReference": "build-1"
   }
 }

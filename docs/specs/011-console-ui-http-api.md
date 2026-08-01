@@ -12,7 +12,7 @@
 
 012 supersedes the `contractArtifact` publish input and generated-manifest file picker described below:
 
-- publish form/API只接收version、description、immutable image digest、versionConfig、runtime与source provenance；
+- publish form/API只接收version、description、immutable image digest、versionConfig与runtime；repository、branch、commit、CI reference等provenance不由用户填写；
 - UI不要求选择、上传或粘贴manifest，也不计算/提交manifest digest；
 - publish返回`202 Accepted`，WorkerVersion detail进入durable pending verification；
 - timeline分别展示candidate deployment、`SDK registration`、Worker polling、`contract verification`与promotion；
@@ -206,7 +206,7 @@ MVP sidebar只显示“总览 / Workers / Workflows / Runs”。参考HTML中的
 | `GET` | `/api/v1/workers/{workerName}` | Worker identity、Current指针、version摘要与recent Runs |
 | `GET` | `/api/v1/workers/{workerName}/versions` | version列表 |
 | `POST` | `/api/v1/workers/{workerName}/versions` | 发布命令，见下文；推荐`202`+operation/read URL |
-| `GET` | `/api/v1/workers/{workerName}/versions/{version}` | version详情、health/probe/source/runtime、read-only contract |
+| `GET` | `/api/v1/workers/{workerName}/versions/{version}` | version详情、health/probe/runtime、read-only contract；旧source字段仅兼容读取且UI不展示 |
 | `PATCH` | `/api/v1/workers/{workerName}/versions/{version}/description` | `{ "description": "..." }` + `If-Match`;只更新description/revision |
 
 ### WorkerVersion 发布输入
@@ -225,12 +225,6 @@ UI可编辑字段：
   "runtime": {
     "cpu": "100m",
     "memory": "128Mi"
-  },
-  "source": {
-    "repository": "https://...",
-    "branch": "main",
-    "commit": "...",
-    "ciReference": "..."
   }
 }
 ```
@@ -242,7 +236,7 @@ UI可编辑字段：
 - Org SDK在候选Worker startup从typed Definition构造canonical contract/digest，经bootstrap registration accepted后才开始polling；UI不参与contract生成或传输。
 - registration accepted后UI只读展示server-stored contract、digest、SDK/runtime identity与后续probe结果。
 - manifest不包含`scope`、Tenant、重复Worker name、version description或version config。
-- `description`属于WorkerVersion且创建必填；PATCH只改变description和revision，不能改变image、runtime、manifest、source或Temporal Build ID。
+- `description`属于WorkerVersion且创建必填；PATCH只改变description和revision，不能改变image、runtime、manifest或Temporal Build ID。
 - org不build/push image；只接受allowlisted registry中的`repository@sha256:<64 lowercase hex>` platform-specific digest。mutable tag、`tag@digest`、multi-arch index digest、observed image mismatch或probe mismatch发布失败。
 - publish必须携带`X-CSRF-Token`与`Idempotency-Key`。CSRF token从同一认证session下的`GET /api/v1/session`读取；publish idempotency ledger及24小时默认retention以012的Approved clarification为准。
 
@@ -252,7 +246,7 @@ UI可编辑字段：
 
 Version详情分开显示：
 
-1. **Release**：version、description、revision、immutable image digest、source provenance、created/actor；
+1. **Release**：version、description、revision、immutable image digest、created/actor；
 2. **Runtime config**：versionConfig、CPU/memory、Secret references；
 3. **Deployment health**：Kubernetes ready、Worker polling、state/failure；
 4. **Contract verification**：submitted manifest digest、canonical validation、probe observed digest、SDK module/runtime protocol、Build ID、`verifiedAt`、`verified | mismatch | unsupported | pending`；
@@ -469,6 +463,45 @@ UI状态语义：
 11. Hello → parallel-confirmation → dynamic-decision browser E2E。
 
 每一步先写会失败的测试，再最小实现。不得先复制参考HTML的mock data/DOM action后再补真实接口。
+
+## 2026-08-02 Console 与 local kind 紧急澄清
+
+**Approved — 用户已授权按本节直接修复。** 本节只收紧既有 Console、publish 与共享 platform Kubernetes Namespace 契约，不引入 010 的未批准策略。
+
+### New Worker 交互
+
+- Console 禁止使用 `window.prompt`、`window.confirm` 等浏览器原生输入框创建 Worker。
+- “创建 Worker”打开站内 `<dialog>`，并复用“录入版本”的同一 modal 组件与版式约定：`.dialog`、`.dialog-head`、`.form-grid`、`.form-actions`、关闭按钮和取消/提交按钮的语义与样式保持一致。表单必须包含显式 `Worker name` label、与服务端一致的格式提示和客户端基础校验、提交与取消操作、inline error 与 `aria-live` 状态。
+- 打开时 focus 落在 name 输入；Escape、取消按钮和关闭按钮均不提交；关闭后 focus 返回触发按钮。服务端仍是最终校验者，失败时保留输入并在 dialog 内展示安全错误。
+
+### WorkerVersion publish 最小公开输入
+
+新的公开 publish request 仅接受：
+
+```json
+{
+  "version": "2026.08.2",
+  "description": "本版本做什么；创建时必填。",
+  "image": "registry.example.com/worker@sha256:<64-lowercase-hex>",
+  "runtime": {"cpu": "100m", "memory": "128Mi"},
+  "versionConfig": {}
+}
+```
+
+- `versionConfig`可省略并默认 `{}`；Console 将其放在明确的高级设置中，不作为首要发布步骤。`runtime`仍是用户可设置的资源边界。
+- `source`、`repository`、`branch`、`commit`、`ciReference`以及 provenance aliases 不再是公开写入字段；strict decoder 必须拒绝客户端提交这些字段。审计主体、请求 ID、镜像观测身份等可信 metadata 由服务端产生。
+- 既有 WorkerVersion 中已经保存的 source provenance 继续可读，以保持数据兼容；新记录允许该旧字段为空。UI 不再要求、展示或编辑 provenance。
+- contract、manifest、projection 与其 digest 仍只来自 Org SDK bootstrap registration，不能随 publish request 上传。
+
+### 共享 platform Kubernetes Namespace reconcile
+
+- 在 apply 任一从属于 platform Kubernetes Namespace 的 Worker 资源前，Kubernetes adapter 必须确保配置的单一共享 platform Kubernetes Namespace 存在。
+- adapter 先执行 read：platform Kubernetes Namespace 已存在即直接使用，不修改 labels、annotations、owner 或其他内容，也不删除其中任何资源。
+- 仅在 Kubernetes 明确返回 NotFound 时，org 才创建该 platform Kubernetes Namespace，并给新建对象加 `app.kubernetes.io/managed-by: org`。并发创建的 AlreadyExists race 通过重新读取收敛；认证、连接等非 NotFound 错误不得降级为 create。
+- Worker workload apply payload 不再包含 platform Kubernetes Namespace resource object，避免 server-side apply 接管一个预先存在的共享 platform Kubernetes Namespace。
+- reconcile 失败必须使 publish operation 进入可轮询的 `failed` 状态并返回安全错误；不得遗留 `running`、泄露 bootstrap credential，或把失败版本标为 Ready/Current。
+- 失败的 WorkerVersion identity 仍是不可变记录。修复环境后，用户以新 version 发布；Console 不暗中覆盖旧失败版本。
+- publish conflict 不得统一显示为模糊的“resource state conflict”：同名不可变 version 已存在时提示用户改用新 version；同一 `Idempotency-Key` 配不同 canonical payload 时提示复用原 payload 或换 key；同 key、同 payload 的 `running` operation 必须返回并继续轮询原 operation，而不是创建第二次发布。
 
 ## 待确认的实现取舍
 

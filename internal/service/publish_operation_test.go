@@ -26,7 +26,7 @@ func TestPublishOperationReservationIsPrincipalScopedIdempotentAndAudited(t *tes
 
 	conflict := request
 	conflict.PayloadDigest = "sha256:payload-b"
-	if _, _, err := cp.ReservePublishOperation(context.Background(), auth, conflict); !errors.Is(err, ErrConflict) {
+	if _, _, err := cp.ReservePublishOperation(context.Background(), auth, conflict); !errors.Is(err, ErrPublishIdempotencyConflict) || !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflict error = %v", err)
 	}
 

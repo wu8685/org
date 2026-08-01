@@ -35,7 +35,7 @@ Worker 不是某次部署产生的 Pod，也不是某个 Run。
 
 ### Version：运行哪一版
 
-Version 是 Worker 的一次不可变发布，由 OCI image digest、runtime 配置、description 和 source provenance 共同描述。
+Version 是 Worker 的一次不可变发布，由 OCI image digest、runtime 配置和 description 共同描述。可信审计 metadata 由平台记录，不是用户可编辑的发布字段。
 
 一个 Worker 可以同时保留：
 

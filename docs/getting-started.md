@@ -120,8 +120,7 @@ IMAGE_DIGEST=org.local/hello-worker@sha256:<digest>
 4. description 填写例如 `First local Hello release`。
 5. image 粘贴上一步的 `IMAGE_DIGEST`。
 6. runtime 填写 `100m` CPU 和 `128Mi` memory。
-7. source 填写当前 repository、branch、commit 和 CI reference；本地体验可以填写清晰的开发标识。
-8. 提交发布。
+7. 提交发布。Console 不要求 repository、branch、commit、CI reference 或 manifest；可信审计 metadata 由服务端记录。
 
 候选 Pod 启动后，Org SDK 会从 typed Definition 在内存中生成 contract 并自动注册。Console 只读展示 contract，不要求上传 manifest。
 

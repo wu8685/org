@@ -86,7 +86,7 @@ make kind-load \
 ## 在 org 中运行
 
 1. 在 Console 创建 Worker `hello-worker`。
-2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU、`128Mi` memory 和 source provenance。
+2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU 和 `128Mi` memory；无需填写源码来源或上传合同文件。
 3. 等待候选 Worker 完成 SDK registration、poller 与 probe。
 4. 触发 `HelloWorkflow`，input 为 `{"name":"Codex"}`。
 5. 立即打开 Run detail：`prepare-greeting` 很快完成，`compose-greeting` 会保持约 10 秒 `running`，随后进入 `completed`。
@@ -100,6 +100,6 @@ Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册
 
 部署时 org 平台注入执行连接、候选 Pod identity 和一次性注册材料。它们不是用户填写的 `.env` 配置，也不得打进 image 或提交到 Git。
 
-用户只维护业务 Definition/Activities 和 image。Version description、resources、Secret reference 与 source provenance 通过 org 发布接口提交；完整字段说明见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
+用户只维护业务 Definition/Activities 和 image。Version description、resources 与 Secret reference 通过 org 发布接口提交；可信审计 metadata 由平台记录。完整字段说明见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
 
 真实 write Activity 必须使用 stable idempotency key，或声明 reconciliation/compensation policy；平台不声称外部效果 exactly once。

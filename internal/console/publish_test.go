@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wu8685/org/internal/domain"
+	"github.com/wu8685/org/internal/service"
 )
 
 func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
@@ -30,8 +31,7 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
       "description":"First release",
       "image":"registry.example.com/hello@sha256:` + strings.Repeat("a", 64) + `",
       "versionConfig":{"region":"local","provider":{"secretRef":"provider-token"}},
-      "runtime":{"cpu":"100m","memory":"128Mi","environment":[]},
-      "source":{"repository":"https://example.com/repo","branch":"main","commit":"cccccccccccc","ciReference":"ci-1"}
+      "runtime":{"cpu":"100m","memory":"128Mi","environment":[]}
     }`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/hello-worker/versions", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -101,7 +101,7 @@ func TestPublishIdempotencyRejectsConflictingPayload(t *testing.T) {
 	handler.ServeHTTP(firstResponse, publishRequest(publishBody(`{"region":"local"}`), "publish-conflict"))
 	conflictResponse := httptest.NewRecorder()
 	handler.ServeHTTP(conflictResponse, publishRequest(strings.Replace(publishBody(`{"region":"local"}`), "First release", "Changed release", 1), "publish-conflict"))
-	if firstResponse.Code != http.StatusAccepted || conflictResponse.Code != http.StatusConflict || !strings.Contains(conflictResponse.Body.String(), `"code":"conflict"`) {
+	if firstResponse.Code != http.StatusAccepted || conflictResponse.Code != http.StatusConflict || !strings.Contains(conflictResponse.Body.String(), `"code":"idempotency_conflict"`) || !strings.Contains(conflictResponse.Body.String(), "different publish request") {
 		t.Fatalf("first=%d conflict=%d body=%s", firstResponse.Code, conflictResponse.Code, conflictResponse.Body.String())
 	}
 	select {
@@ -113,6 +113,31 @@ func TestPublishIdempotencyRejectsConflictingPayload(t *testing.T) {
 	case duplicate := <-published:
 		t.Fatalf("conflicting publish reached backend: %#v", duplicate)
 	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func TestPublishOperationExplainsExistingImmutableVersion(t *testing.T) {
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{err: service.ErrWorkerVersionExists}})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, publishRequest(publishBody(`{}`), "publish-existing-version"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("publish status=%d body=%s", response.Code, response.Body.String())
+	}
+	location := response.Header().Get("Location")
+	deadline := time.Now().Add(time.Second)
+	for {
+		poll := httptest.NewRecorder()
+		handler.ServeHTTP(poll, httptest.NewRequest(http.MethodGet, location, nil))
+		if poll.Code == http.StatusOK && strings.Contains(poll.Body.String(), `"state":"failed"`) {
+			if !strings.Contains(poll.Body.String(), `"code":"worker_version_exists"`) || !strings.Contains(poll.Body.String(), "publish a new version") {
+				t.Fatalf("unclear failed operation: %s", poll.Body.String())
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation did not fail: status=%d body=%s", poll.Code, poll.Body.String())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -145,7 +170,6 @@ func publishBody(versionConfig string) string {
 		"version": "v1", "description": "First release",
 		"image":         "registry.example.com/hello@sha256:" + strings.Repeat("a", 64),
 		"runtime":       map[string]any{"cpu": "100m", "memory": "128Mi", "environment": []any{}},
-		"source":        map[string]any{"repository": "https://example.com/repo", "branch": "main", "commit": "cccccccccccc", "ciReference": "ci-1"},
 		"versionConfig": config,
 	}
 	encoded, err := json.Marshal(value)
@@ -153,6 +177,40 @@ func publishBody(versionConfig string) string {
 		panic(err)
 	}
 	return string(encoded)
+}
+
+func TestPublishRejectsUserSuppliedProvenance(t *testing.T) {
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
+	for _, field := range []string{
+		`"source":{"repository":"https://example.com/repo","commit":"ccccccc","ciReference":"ci-1"}`,
+		`"repository":"https://example.com/repo"`, `"branch":"main"`, `"commit":"ccccccc"`, `"ciReference":"ci-1"`,
+	} {
+		body := strings.TrimSuffix(publishBody(`{}`), "}") + "," + field + "}"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, publishRequest(body, "publish-provenance"))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"validation_failed"`) {
+			t.Fatalf("field=%s status=%d body=%s", field, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestPublishDefaultsOmittedVersionConfigAndDoesNotAcceptSource(t *testing.T) {
+	published := make(chan domain.WorkerVersionRequest, 1)
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{published: published}})
+	body := `{"version":"v2","description":"Second release","image":"registry.example.com/hello@sha256:` + strings.Repeat("b", 64) + `","runtime":{"cpu":"100m","memory":"128Mi"}}`
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, publishRequest(body, "publish-v2"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	select {
+	case got := <-published:
+		if string(got.VersionConfig) != `{}` || got.Source != (domain.SourceProvenance{}) {
+			t.Fatalf("publish request config/source = %s / %#v", got.VersionConfig, got.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish did not reach control plane")
+	}
 }
 
 func TestPublishRejectsEditableContractAliasesAndTenantFields(t *testing.T) {

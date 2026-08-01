@@ -8,7 +8,6 @@
 - registry 或 Sample `make kind-load` 返回的 immutable `IMAGE_DIGEST`。
 - Version label 和 description。
 - Pod CPU/memory、Secret reference 等 runtime 配置。
-- repository、branch、commit 和 CI reference 等 source provenance。
 
 org does not build or push image。它从 immutable `registry/repository@sha256:<64 lowercase hex>` 开始接手。
 
@@ -56,16 +55,15 @@ Content-Type: application/json
 | `image` | immutable OCI digest | tag、`tag@digest`、源码地址 |
 | `versionConfig` | Version 的业务配置 | 平台 routing |
 | `runtime` | Pod CPU/memory 和 Secret reference | Secret value |
-| `source` | repository、branch、commit、CI provenance | 用于运行时认证的 credential |
 
-Worker name 来自 URL，Tenant 来自认证主体。请求体不得自行发送 Tenant identity、Worker name、`scope`、平台 routing、credential、contract、metadata 或 projection 字段。
+Worker name 来自 URL，Tenant 来自认证主体。审计主体、request ID 和运行时镜像观测结果等可信 provenance 是 server-derived metadata，不由发布者填写。请求体不得自行发送 Tenant identity、Worker name、`scope`、`source`、repository/branch/commit/CI reference、平台 routing、credential、contract、metadata 或 projection 字段；旧 Version 中已有的 source 数据仍可读取。
 
 ## Idempotency-Key
 
 `Idempotency-Key` 必须包含 1–200 个 visible ASCII 字符（`!`–`~`，不含空格）。
 
 - 相同 Tenant、principal、key 和 canonical payload：返回同一 operation。
-- 同一 scope 下复用 key，但改变 payload：返回 `409 conflict`。
+- 同一 Tenant/principal 下复用 key，但改变 payload：返回 `409 idempotency_conflict`。
 - JSON object 字段顺序和无意义空白：不改变 canonical payload。
 - terminal reservation：默认保留 24 小时。
 
@@ -85,6 +83,7 @@ API 返回 `202 Accepted` 和可轮询的 operation URL。成功条件不是“H
 | registration rejected | 运行中的 SDK contract、image、protocol 或 workload identity 不满足发布约束 | 修复 Worker 后发布新 Version |
 | poller/probe 未通过 | candidate 已启动，但尚不能证明目标 Workflow 可由该 Version 正确服务 | 查看 operation、candidate Pod 和高级诊断信息 |
 | idempotency conflict | 同一 key 被用于不同 payload | 为新的发布意图使用新 key |
+| WorkerVersion already exists | 同名不可变 Version 已经登记 | 使用新的 Version label；不要覆盖旧 Version |
 
 ## Secret 与外部副作用
 

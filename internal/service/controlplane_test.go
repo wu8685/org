@@ -34,6 +34,17 @@ func TestDeployWaitsForKubernetesAndTemporalBeforeCurrent(t *testing.T) {
 	}
 }
 
+func TestPublishRejectsAnExistingImmutableVersionWithSpecificConflict(t *testing.T) {
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}, BootstrapEndpoint: "https://org.local/internal/bootstrap"}, &fakeCluster{}, &fakeExecutor{})
+	request := workerVersionRequest("v1")
+	if _, err := cp.PublishVersion(context.Background(), auth, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cp.PublishVersion(context.Background(), auth, request); !errors.Is(err, ErrWorkerVersionExists) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate version error = %v", err)
+	}
+}
+
 func TestPublishWithoutContractStopsAwaitingBootstrapRegistrationBeforeTemporal(t *testing.T) {
 	cluster := &fakeCluster{}
 	executor := &fakeExecutor{}

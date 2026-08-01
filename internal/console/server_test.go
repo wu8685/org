@@ -110,7 +110,7 @@ func (c *stubControlPlane) ReservePublishOperation(_ context.Context, auth servi
 	scope := auth.TenantID + "\x00" + auth.PrincipalID + "\x00" + request.IdempotencyKey
 	if existing, ok := c.publishByScope[scope]; ok {
 		if existing.PayloadDigest != request.PayloadDigest {
-			return existing, false, service.ErrConflict
+			return existing, false, service.ErrPublishIdempotencyConflict
 		}
 		return existing, false, nil
 	}
@@ -278,6 +278,8 @@ func TestServiceErrorsMapToStableHTTPStatus(t *testing.T) {
 	}{
 		{service.ErrPermissionDenied, http.StatusForbidden, "permission_denied"},
 		{service.ErrNotFound, http.StatusNotFound, "not_found"},
+		{service.ErrWorkerVersionExists, http.StatusConflict, "worker_version_exists"},
+		{service.ErrPublishIdempotencyConflict, http.StatusConflict, "idempotency_conflict"},
 		{service.ErrConflict, http.StatusConflict, "conflict"},
 		{service.ErrTenantQuotaExceeded, http.StatusTooManyRequests, "quota_exceeded"},
 		{errors.New("bad input"), http.StatusBadRequest, "validation_failed"},

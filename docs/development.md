@@ -77,7 +77,7 @@ ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 
 ## Image 边界
 
-`org` 不构建或发布 Worker image（does not build user images）。发布请求接收已经发布、由 `sha256` digest 固定的 OCI reference，以及 version description、runtime reference 和 source provenance。部署后的 Org SDK 自动注册生成的 contract；Console 不接收 manifest upload。Source repository 字段只用作 audit data，control plane 不会 clone repository。
+`org` 不构建或发布 Worker image（does not build user images）。发布请求接收已经发布、由 `sha256` digest 固定的 OCI reference，以及 version description 和 runtime reference。部署后的 Org SDK 自动注册生成的 contract；Console 不接收 manifest upload，也不接收 repository、branch、commit 或 CI reference。可信 audit metadata 由 control plane 记录。
 
 ## 日常验证
 
@@ -116,7 +116,7 @@ make dynamic-e2e-local
 
 1. 创建一个由两个测试 Tenant 共享的唯一 platform Kubernetes Namespace，以及一个幂等 downstream fixture。
 2. 构建 sample version A 和 B，并以不可变 digest alias 加载到 kind。
-3. 通过 `ControlPlane` 提交真实的 metadata/provenance deployment request。
+3. 通过 `ControlPlane` 提交真实的 digest-only deployment request。
 4. 等待 Kubernetes ready 和 Temporal Worker polling。
 5. 验证未指定版本的 invocation 使用 Current version B。
 6. 验证 semantic DAG projection 和结果。

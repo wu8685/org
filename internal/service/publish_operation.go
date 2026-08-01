@@ -158,7 +158,7 @@ func (s *MemoryStore) ReservePublishOperation(candidate domain.PublishOperation,
 			continue
 		}
 		if existing.PayloadDigest != candidate.PayloadDigest {
-			return existing, false, ErrConflict
+			return existing, false, ErrPublishIdempotencyConflict
 		}
 		return existing, false, nil
 	}
@@ -205,7 +205,7 @@ func (s *FileStore) ReservePublishOperation(candidate domain.PublishOperation, n
 			continue
 		}
 		if existing.PayloadDigest != candidate.PayloadDigest {
-			return existing, false, ErrConflict
+			return existing, false, ErrPublishIdempotencyConflict
 		}
 		return existing, false, nil
 	}

@@ -154,12 +154,11 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 }
 
 type publishVersionInput struct {
-	Version       string                  `json:"version"`
-	Description   string                  `json:"description"`
-	Image         string                  `json:"image"`
-	VersionConfig json.RawMessage         `json:"versionConfig,omitempty"`
-	Runtime       publishRuntime          `json:"runtime"`
-	Source        domain.SourceProvenance `json:"source"`
+	Version       string          `json:"version"`
+	Description   string          `json:"description"`
+	Image         string          `json:"image"`
+	VersionConfig json.RawMessage `json:"versionConfig,omitempty"`
+	Runtime       publishRuntime  `json:"runtime"`
 }
 
 type publishRuntime struct {
@@ -174,6 +173,9 @@ func (s *server) publishVersion(response http.ResponseWriter, request *http.Requ
 		writeAPIError(response, http.StatusBadRequest, "validation_failed", err.Error(), requestID)
 		return
 	}
+	if len(input.VersionConfig) == 0 {
+		input.VersionConfig = json.RawMessage(`{}`)
+	}
 	canonicalVersionConfig, err := canonicalJSON(input.VersionConfig)
 	if err != nil {
 		writeAPIError(response, http.StatusBadRequest, "validation_failed", "versionConfig must be valid JSON", requestID)
@@ -183,7 +185,7 @@ func (s *server) publishVersion(response http.ResponseWriter, request *http.Requ
 	command := domain.WorkerVersionRequest{
 		WorkerName: workerName, Version: input.Version, Description: input.Description, Image: input.Image,
 		VersionConfig: input.VersionConfig,
-		Runtime:       domain.RuntimeSpec{CPU: input.Runtime.CPU, Memory: input.Runtime.Memory, Environment: input.Runtime.Environment}, Source: input.Source,
+		Runtime:       domain.RuntimeSpec{CPU: input.Runtime.CPU, Memory: input.Runtime.Memory, Environment: input.Runtime.Environment},
 	}
 	payloadDigest, err := publishPayloadDigest(workerName, input)
 	if err != nil {
@@ -259,14 +261,13 @@ func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
 
 func publishPayloadDigest(workerName string, input publishVersionInput) (string, error) {
 	payload := struct {
-		WorkerName    string                  `json:"workerName"`
-		Version       string                  `json:"version"`
-		Description   string                  `json:"description"`
-		Image         string                  `json:"image"`
-		VersionConfig json.RawMessage         `json:"versionConfig,omitempty"`
-		Runtime       publishRuntime          `json:"runtime"`
-		Source        domain.SourceProvenance `json:"source"`
-	}{workerName, input.Version, input.Description, input.Image, input.VersionConfig, input.Runtime, input.Source}
+		WorkerName    string          `json:"workerName"`
+		Version       string          `json:"version"`
+		Description   string          `json:"description"`
+		Image         string          `json:"image"`
+		VersionConfig json.RawMessage `json:"versionConfig,omitempty"`
+		Runtime       publishRuntime  `json:"runtime"`
+	}{workerName, input.Version, input.Description, input.Image, input.VersionConfig, input.Runtime}
 	canonical, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -830,6 +831,10 @@ func httpError(err error) (int, string, string) {
 		return http.StatusForbidden, "permission_denied", "Permission denied"
 	case errors.Is(err, service.ErrNotFound):
 		return http.StatusNotFound, "not_found", "Resource not found"
+	case errors.Is(err, service.ErrWorkerVersionExists):
+		return http.StatusConflict, "worker_version_exists", "WorkerVersion already exists; publish a new version"
+	case errors.Is(err, service.ErrPublishIdempotencyConflict):
+		return http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used with a different publish request"
 	case errors.Is(err, service.ErrConflict):
 		return http.StatusConflict, "conflict", "Resource state conflicts with the request"
 	case errors.Is(err, service.ErrTenantQuotaExceeded):

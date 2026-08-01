@@ -39,6 +39,9 @@ func (c *Client) Apply(ctx context.Context, d domain.WorkerVersion) error {
 	if err != nil {
 		return err
 	}
+	if err := c.ensureNamespace(ctx); err != nil {
+		return err
+	}
 	_, err = c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "apply", "-f", "-")...)
 	return err
 }
@@ -48,8 +51,34 @@ func (c *Client) ApplyBootstrap(ctx context.Context, d domain.WorkerVersion, dep
 	if err != nil {
 		return err
 	}
+	if err := c.ensureNamespace(ctx); err != nil {
+		return err
+	}
 	_, err = c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "apply", "-f", "-")...)
 	return err
+}
+
+func (c *Client) ensureNamespace(ctx context.Context) error {
+	_, err := c.runner.Run(ctx, "", "kubectl", append(c.flags(), "get", "namespace", c.cfg.Namespace)...)
+	if err == nil {
+		return nil
+	}
+	if !namespaceNotFound(err, c.cfg.Namespace) {
+		return err
+	}
+	manifest := fmt.Sprintf("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n  labels:\n    app.kubernetes.io/managed-by: org\n", c.cfg.Namespace)
+	if _, createErr := c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "create", "-f", "-")...); createErr != nil {
+		if !strings.Contains(createErr.Error(), "(AlreadyExists)") {
+			return createErr
+		}
+		_, readErr := c.runner.Run(ctx, "", "kubectl", append(c.flags(), "get", "namespace", c.cfg.Namespace)...)
+		return readErr
+	}
+	return nil
+}
+
+func namespaceNotFound(err error, namespace string) bool {
+	return err != nil && strings.Contains(err.Error(), "(NotFound)") && strings.Contains(err.Error(), fmt.Sprintf(`namespaces %q not found`, namespace))
 }
 
 func RenderBootstrapManifest(d domain.WorkerVersion, cfg Config, deployment service.BootstrapDeployment) (string, error) {
@@ -126,11 +155,6 @@ func RenderManifest(d domain.WorkerVersion, cfg Config) (string, error) {
 		fmt.Fprintf(&extraEnv, "        - name: %s\n          valueFrom:\n            secretKeyRef:\n              name: %s\n              key: %s\n", env.Name, env.Secret, env.SecretKey)
 	}
 	manifest := fmt.Sprintf(`apiVersion: v1
-kind: Namespace
-metadata:
-  name: %s
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: %s
@@ -198,7 +222,7 @@ spec:
 %s      volumes:
       - name: tmp
         emptyDir: {}
-`, cfg.Namespace, d.KubernetesServiceAccount, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, name, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, d.KubernetesServiceAccount, d.Image, d.Runtime.CPU, d.Runtime.Memory, d.Runtime.CPU, d.Runtime.Memory, cfg.WorkerTemporalAddress, cfg.TemporalNamespace, d.TaskQueue, d.WorkerDeployment, d.Version, extraEnv.String())
+`, d.KubernetesServiceAccount, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, name, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, d.KubernetesServiceAccount, d.Image, d.Runtime.CPU, d.Runtime.Memory, d.Runtime.CPU, d.Runtime.Memory, cfg.WorkerTemporalAddress, cfg.TemporalNamespace, d.TaskQueue, d.WorkerDeployment, d.Version, extraEnv.String())
 	if cfg.NetworkPolicyEnabled {
 		manifest += fmt.Sprintf(`---
 apiVersion: networking.k8s.io/v1

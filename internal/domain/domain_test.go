@@ -95,7 +95,6 @@ func TestValidateWorkerVersionPublishAcceptsOnlyCanonicalPlatformDigestAndNoCont
 		WorkerName: "payments-worker", Description: "Charges payment orders.",
 		Image: "registry.example.com/acme/payments@sha256:" + strings.Repeat("a", 64), Version: "2026.08.1",
 		Runtime: RuntimeSpec{CPU: "100m", Memory: "128Mi"},
-		Source:  SourceProvenance{Repository: "https://github.com/acme/payments", Branch: "main", Commit: "abcdef1234567", CIReference: "build-42"},
 	}
 	if err := ValidateWorkerVersionPublish(req, []string{"registry.example.com"}); err != nil {
 		t.Fatalf("valid pending release: %v", err)

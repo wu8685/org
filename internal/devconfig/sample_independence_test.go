@@ -182,7 +182,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "architecture/overview.md", "development.md", "specs/"},
 		"docs/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
 		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "api/publish-worker-version.md"},
-		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "source"},
+		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
 		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
 		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
 	}
@@ -191,6 +191,14 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		for _, want := range wants {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing %q", relative, want)
+			}
+		}
+	}
+	for _, relative := range []string{"docs/api/publish-worker-version.md", "docs/api/examples/publish-worker-version.json", "docs/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+		text := read(t, filepath.Join(root, relative))
+		for _, forbidden := range []string{"source provenance through org", "source provenance。", `"source":`, "source 填写"} {
+			if strings.Contains(text, forbidden) {
+				t.Errorf("%s still asks the user for publish provenance %q", relative, forbidden)
 			}
 		}
 	}

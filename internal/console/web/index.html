@@ -46,19 +46,26 @@
     </div>
   </div>
 
+  <dialog class="dialog" data-worker-dialog aria-labelledby="worker-title">
+    <form method="dialog" class="dialog-head"><h2 id="worker-title">创建 Worker</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
+    <form class="form-grid" data-worker-form>
+      <label for="worker-name">Worker name</label>
+      <input id="worker-name" name="workerName" required maxlength="48" pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" autocomplete="off" aria-describedby="worker-name-help worker-name-error">
+      <p id="worker-name-help" class="field-help">使用小写字母、数字和连字符；最长 48 个字符，创建后不可修改。</p>
+      <div id="worker-name-error" class="form-error" data-worker-error aria-live="polite" hidden></div>
+      <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">创建 Worker</button></div>
+    </form>
+  </dialog>
+
   <dialog class="dialog" data-publish-dialog aria-labelledby="publish-title">
     <form method="dialog" class="dialog-head"><h2 id="publish-title">录入 WorkerVersion</h2><button class="icon-button" value="cancel" aria-label="关闭">×</button></form>
     <form class="form-grid" data-publish-form>
       <label>Version<input name="version" required></label>
       <label>Description<textarea name="description" required maxlength="2000"></textarea></label>
       <label>OCI image digest<input name="image" required placeholder="registry.example/worker@sha256:…"></label>
-      <label>Version config (JSON)<textarea name="versionConfig">{}</textarea></label>
       <label>CPU request / limit<input name="cpu" value="100m" required></label>
       <label>Memory request / limit<input name="memory" value="128Mi" required></label>
-      <label>Source repository URL<input name="repository" type="url" required placeholder="https://github.com/example/worker"></label>
-      <label>Source branch<input name="branch" required value="main"></label>
-      <label>Source commit<input name="commit" required pattern="[0-9a-fA-F]{7,64}"></label>
-      <label>CI reference<input name="ciReference" required></label>
+      <details class="advanced-fields"><summary>高级设置</summary><label>Version config (JSON)<textarea name="versionConfig">{}</textarea></label></details>
       <section class="readonly-contract" data-contract-readonly aria-label="SDK registration 状态"><p>发布后等待候选 Worker 通过 Org SDK 自动注册 contract。合同仅可读取，不从 Console 上传或编辑。</p></section>
       <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">开始发布</button></div>
     </form>

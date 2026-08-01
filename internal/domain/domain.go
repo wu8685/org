@@ -654,14 +654,8 @@ func ValidateWorkerVersion(req WorkerVersionRequest, allowlist []string) error {
 			problems = append(problems, "environment reference contains an unsafe name")
 		}
 	}
-	if u, err := url.ParseRequestURI(req.Source.Repository); err != nil || u.Scheme == "" || u.Host == "" {
-		problems = append(problems, "source repository must be an absolute URL")
-	}
-	if !commitPattern.MatchString(req.Source.Commit) {
-		problems = append(problems, "source commit must be a commit hash")
-	}
-	if req.Source.CIReference == "" {
-		problems = append(problems, "source CI reference is required")
+	if req.Source != (SourceProvenance{}) {
+		problems = append(problems, validateSourceProvenance(req.Source)...)
 	}
 	if len(problems) != 0 {
 		return errors.New(strings.Join(problems, "; "))
@@ -707,16 +701,27 @@ func ValidateWorkerVersionPublish(req WorkerVersionPublishRequest, allowlist []s
 			problems = append(problems, "environment reference contains an unsafe name")
 		}
 	}
-	if u, err := url.ParseRequestURI(req.Source.Repository); err != nil || u.Scheme == "" || u.Host == "" {
-		problems = append(problems, "source repository must be an absolute URL")
-	}
-	if !commitPattern.MatchString(req.Source.Commit) || req.Source.CIReference == "" {
-		problems = append(problems, "source commit and CI reference are required")
+	if req.Source != (SourceProvenance{}) {
+		problems = append(problems, validateSourceProvenance(req.Source)...)
 	}
 	if len(problems) != 0 {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func validateSourceProvenance(source SourceProvenance) []string {
+	var problems []string
+	if u, err := url.ParseRequestURI(source.Repository); err != nil || u.Scheme == "" || u.Host == "" {
+		problems = append(problems, "source repository must be an absolute URL")
+	}
+	if !commitPattern.MatchString(source.Commit) {
+		problems = append(problems, "source commit must be a commit hash")
+	}
+	if source.CIReference == "" {
+		problems = append(problems, "source CI reference is required")
+	}
+	return problems
 }
 
 func ValidateWorkerContractRegistration(req WorkerContractRegistration, expectedBuildID string) error {
