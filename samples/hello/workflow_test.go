@@ -1,7 +1,9 @@
 package hello
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/sdk/orgsdk"
 )
@@ -27,7 +29,7 @@ func TestHelloProjectionNodeIDsAndDependenciesAreReplayStable(t *testing.T) {
 
 func executeHello(t *testing.T, version, name string) orgsdk.Projection {
 	t.Helper()
-	worker, err := NewWorker(version)
+	worker, err := NewWorker(version, withActivitySleeper(func(context.Context, time.Duration) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}

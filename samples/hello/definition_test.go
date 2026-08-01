@@ -1,7 +1,9 @@
 package hello
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/wu8685/org/sdk/orgsdk"
 )
@@ -30,7 +32,11 @@ func TestHelloDefinitionUsesOnlyOrgSDKAndDeclaresSequentialSemanticGraph(t *test
 }
 
 func TestHelloWorkerRunsThroughOrgSDKTestkit(t *testing.T) {
-	worker, err := NewWorker("v1")
+	var slept time.Duration
+	worker, err := NewWorker("v1", withActivitySleeper(func(_ context.Context, duration time.Duration) error {
+		slept = duration
+		return nil
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,6 +55,9 @@ func TestHelloWorkerRunsThroughOrgSDKTestkit(t *testing.T) {
 	if result.Message != "Hello, Codex!" || result.WorkerVersion != "v1" || len(result.IdempotencyKey) != 64 {
 		t.Fatalf("result = %#v", result)
 	}
+	if slept != 10*time.Second {
+		t.Fatalf("ComposeGreeting demo delay = %s, want 10s", slept)
+	}
 	projection, err := env.Projection()
 	if err != nil {
 		t.Fatal(err)
@@ -63,5 +72,27 @@ func TestHelloWorkerRunsThroughOrgSDKTestkit(t *testing.T) {
 	}
 	if projection.Nodes[1].Dependencies[0] != projection.Nodes[0].RuntimeNodeID || projection.Nodes[2].Dependencies[0] != projection.Nodes[1].RuntimeNodeID {
 		t.Fatalf("dependencies = %#v", projection.Nodes)
+	}
+}
+
+func TestHelloComposeDelayIsConfigurableWithoutWallClockSleep(t *testing.T) {
+	var slept time.Duration
+	worker, err := NewWorker("v1", WithComposeGreetingDelay(275*time.Millisecond), withActivitySleeper(func(_ context.Context, duration time.Duration) error {
+		slept = duration
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := orgsdk.NewTestEnvironment()
+	if err := env.Register(worker.Registrations()...); err != nil {
+		t.Fatal(err)
+	}
+	env.ExecuteWorkflow(WorkflowName, GreetingInput{Name: "Codex"})
+	if err := env.WorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if slept != 275*time.Millisecond {
+		t.Fatalf("configured ComposeGreeting demo delay = %s", slept)
 	}
 }

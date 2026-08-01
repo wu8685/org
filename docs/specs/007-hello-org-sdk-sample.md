@@ -68,6 +68,16 @@ samples/hello/
 6. Docker/build/kind contract 与现有 immutable digest 行为不退化。
 7. 真实 E2E 继续覆盖 Current 与显式历史 Pinned version。
 
+## 2026-08-02 教学演示延迟澄清
+
+**Approved — 用户已授权实现。** 为了让第一次使用 Console 的用户能实际观察 Run 从 `prepare-greeting` 进入 `compose-greeting=running`，Hello Sample 在 `ComposeGreeting` Activity handler 内加入默认约 10 秒的教学延迟。
+
+- 延迟只能发生在 Activity process 中，必须响应 Activity `context.Context` 取消；Workflow Definition 不调用 `time.Sleep`、timer 或任何外部 I/O，因此 replay determinism 不变。
+- 默认延迟为 10 秒，可通过 Hello package 的构造 option 调整。真实 Worker main 使用默认值；单元测试注入 sleeper，在不等待 wall clock 的情况下验证默认/自定义 duration。
+- `compose-greeting` 的 Start-To-Close timeout 必须显著长于默认延迟。失败/retry会重新执行整个 Activity；该教学 Activity没有外部副作用。
+- 真实 local Hello E2E 保留默认 10 秒：先观察 `prepare-greeting=completed`、`compose-greeting=running`，确认它在短观察区间仍未完成，再等待三个节点全部 completed。
+- 这不是生产 pacing、rate limiting 或进度模拟方案。用户自己的 Worker 应删除该延迟，以真实业务 Activity 生命周期驱动 projection；不得复制人为 sleep 来伪造处理状态。
+
 ## README 设计
 
 README 固定按以下顺序：

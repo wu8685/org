@@ -1,12 +1,28 @@
 package hello
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
+
+func sleepActivity(ctx context.Context, delay time.Duration) error {
+	if delay == 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func PrepareGreeting(input GreetingInput) (GreetingContext, error) {
 	name := strings.TrimSpace(input.Name)

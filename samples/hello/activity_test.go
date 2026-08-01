@@ -1,8 +1,11 @@
 package hello
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrepareGreetingTrimsNameIntoContext(t *testing.T) {
@@ -12,6 +15,19 @@ func TestPrepareGreetingTrimsNameIntoContext(t *testing.T) {
 	}
 	if context.Name != "Ada" {
 		t.Fatalf("context = %#v", context)
+	}
+}
+
+func TestActivitySleepReturnsPromptlyWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	err := sleepActivity(ctx, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("sleep error = %v", err)
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("canceled Activity sleep blocked for %s", time.Since(started))
 	}
 }
 

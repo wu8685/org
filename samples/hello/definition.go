@@ -1,10 +1,33 @@
 package hello
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/wu8685/org/sdk/orgsdk"
 )
+
+const defaultComposeGreetingDelay = 10 * time.Second
+
+type activitySleeper func(context.Context, time.Duration) error
+
+type workerConfig struct {
+	composeGreetingDelay time.Duration
+	sleep                activitySleeper
+}
+
+type WorkerOption func(*workerConfig)
+
+// WithComposeGreetingDelay changes the teaching delay inside ComposeGreeting.
+// Production Workers should remove artificial delays and expose real Activity work.
+func WithComposeGreetingDelay(delay time.Duration) WorkerOption {
+	return func(config *workerConfig) { config.composeGreetingDelay = delay }
+}
+
+func withActivitySleeper(sleep activitySleeper) WorkerOption {
+	return func(config *workerConfig) { config.sleep = sleep }
+}
 
 type Worker struct {
 	Definition orgsdk.Definition
@@ -13,18 +36,37 @@ type Worker struct {
 	workflow   orgsdk.WorkflowDefinition[GreetingInput, GreetingResult]
 }
 
-func NewWorker(version string) (Worker, error) {
-	policy := orgsdk.ActivityPolicy{
+func NewWorker(version string, options ...WorkerOption) (Worker, error) {
+	config := workerConfig{composeGreetingDelay: defaultComposeGreetingDelay, sleep: sleepActivity}
+	for _, option := range options {
+		option(&config)
+	}
+	if config.composeGreetingDelay < 0 {
+		return Worker{}, errors.New("ComposeGreeting demo delay must not be negative")
+	}
+	if config.sleep == nil {
+		return Worker{}, errors.New("ComposeGreeting Activity sleeper is required")
+	}
+	startToCloseTimeout := config.composeGreetingDelay + 20*time.Second
+	if startToCloseTimeout < 30*time.Second {
+		startToCloseTimeout = 30 * time.Second
+	}
+	preparePolicy := orgsdk.ActivityPolicy{
 		SideEffect: orgsdk.SideEffectNone,
 		Retry: orgsdk.RetryPolicy{
 			InitialInterval: 100 * time.Millisecond, BackoffCoefficient: 2,
 			MaximumInterval: 2 * time.Second, MaximumAttempts: 3, StartToCloseTimeout: 5 * time.Second,
 		},
 	}
-	prepare := orgsdk.NewActivity(prepareGreetingActivityID, policy, func(_ orgsdk.ActivityContext, input GreetingInput) (GreetingContext, error) {
+	composePolicy := preparePolicy
+	composePolicy.Retry.StartToCloseTimeout = startToCloseTimeout
+	prepare := orgsdk.NewActivity(prepareGreetingActivityID, preparePolicy, func(_ orgsdk.ActivityContext, input GreetingInput) (GreetingContext, error) {
 		return PrepareGreeting(input)
 	})
-	compose := orgsdk.NewActivity(composeGreetingActivityID, policy, func(ctx orgsdk.ActivityContext, greeting GreetingContext) (GreetingResult, error) {
+	compose := orgsdk.NewActivity(composeGreetingActivityID, composePolicy, func(ctx orgsdk.ActivityContext, greeting GreetingContext) (GreetingResult, error) {
+		if err := config.sleep(ctx.Context, config.composeGreetingDelay); err != nil {
+			return GreetingResult{}, err
+		}
 		key, err := StableIdempotencyKey(ctx.WorkflowID, ctx.ActivityID)
 		if err != nil {
 			return GreetingResult{}, err

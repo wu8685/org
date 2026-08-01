@@ -91,3 +91,16 @@ func TestImageFilesStaySmallAndReadable(t *testing.T) {
 		}
 	}
 }
+
+func TestREADMEExplainsObservableTeachingDelayWithoutRecommendingItForProduction(t *testing.T) {
+	contents, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, want := range []string{"约 10 秒", "compose-greeting", "running", "Run detail", "教学演示", "production", "不应照搬"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("README missing teaching-delay guidance %q", want)
+		}
+	}
+}

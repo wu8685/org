@@ -65,7 +65,14 @@ func TestLocalControlPlaneAcceptance(t *testing.T) {
 		t.Fatalf("start Current invocation: %v", err)
 	}
 	run.trackInvocation(authA, current.ID)
+	startedAt := time.Now()
+	waitForComposeGreetingRunning(t, ctx, controlPlane, authA, current.ID)
+	time.Sleep(2 * time.Second)
+	assertComposeGreetingStillRunning(t, ctx, controlPlane, authA, current.ID)
 	currentView := waitForCompletedProjection(t, ctx, controlPlane, authA, current.ID)
+	if elapsed := time.Since(startedAt); elapsed < 8*time.Second {
+		t.Fatalf("Hello demo completed too quickly to observe ComposeGreeting running: %s", elapsed)
+	}
 	assertExecutionVersion(t, currentView, versionB.version, currentName)
 
 	historicalName := "historical-" + run.id

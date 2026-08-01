@@ -252,6 +252,49 @@ func waitForCompletedProjection(t *testing.T, ctx context.Context, control *serv
 	}
 }
 
+func waitForComposeGreetingRunning(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, id string) {
+	t.Helper()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		view, err := control.GetInvocation(ctx, auth, id)
+		if err == nil && view.SemanticProjection != nil {
+			statuses := projectionStatuses(view.SemanticProjection.Nodes)
+			if statuses["prepare-greeting"] == orgsdk.NodeStatusCompleted && statuses["compose-greeting"] == orgsdk.NodeStatusRunning {
+				return
+			}
+			if view.Execution.Status == "completed" || statuses["compose-greeting"] == orgsdk.NodeStatusCompleted {
+				t.Fatalf("Hello demo completed before compose-greeting running was observable: %#v", view.SemanticProjection.Nodes)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for compose-greeting running: %v", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertComposeGreetingStillRunning(t *testing.T, ctx context.Context, control *service.ControlPlane, auth service.AuthenticatedContext, id string) {
+	t.Helper()
+	view, err := control.GetInvocation(ctx, auth, id)
+	if err != nil || view.SemanticProjection == nil {
+		t.Fatalf("read running Hello projection: view=%#v err=%v", view, err)
+	}
+	statuses := projectionStatuses(view.SemanticProjection.Nodes)
+	if statuses["compose-greeting"] != orgsdk.NodeStatusRunning || view.Execution.Status == "completed" {
+		t.Fatalf("compose-greeting did not remain observable as running: execution=%s nodes=%#v", view.Execution.Status, view.SemanticProjection.Nodes)
+	}
+}
+
+func projectionStatuses(nodes []orgsdk.NodeProjection) map[string]orgsdk.NodeStatus {
+	statuses := make(map[string]orgsdk.NodeStatus, len(nodes))
+	for _, node := range nodes {
+		statuses[node.TemplateID] = node.Status
+	}
+	return statuses
+}
+
 func assertExecutionVersion(t *testing.T, view service.InvocationView, wantVersion, wantName string) {
 	t.Helper()
 	if view.Invocation.SelectedVersion != wantVersion {

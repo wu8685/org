@@ -24,6 +24,8 @@ prepare-greeting → compose-greeting → completed
 
 Sample 不 import raw Temporal SDK，不手写 projection 或平台 routing。Org SDK 负责 stable node/Activity ID、dynamic semantic projection 和启动时 contract registration。
 
+为了让第一次演示时能看见处理中状态，`ComposeGreeting` Activity 默认包含约 10 秒的教学演示延迟。它只发生在 Activity 中，可通过 `WithComposeGreetingDelay` 调整；Workflow 本身不 sleep，也不影响 replay determinism。
+
 ## 测试
 
 从本目录运行：
@@ -35,7 +37,7 @@ make vet
 make verify
 ```
 
-预期结果：输入 `{"name":"Codex"}` 后返回 `Hello, Codex!`，projection 中的三个节点均为 `completed`。
+测试注入 no-op sleeper，因此不会等待 10 秒。预期结果：输入 `{"name":"Codex"}` 后返回 `Hello, Codex!`，projection 中的三个节点均为 `completed`。
 
 ## 构建本地 image
 
@@ -87,9 +89,12 @@ make kind-load \
 2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU、`128Mi` memory 和 source provenance。
 3. 等待候选 Worker 完成 SDK registration、poller 与 probe。
 4. 触发 `HelloWorkflow`，input 为 `{"name":"Codex"}`。
-5. 在 Run detail 观察顺序 DAG 与最终结果。
+5. 立即打开 Run detail：`prepare-greeting` 很快完成，`compose-greeting` 会保持约 10 秒 `running`，随后进入 `completed`。
+6. 等待最终结果 `Hello, Codex!`。
 
 Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册。用户不管理 contract artifact，Console 只读展示注册结果。
+
+> 这段延迟只为了让 Console 演示更容易观察，不代表真实业务处理。production Worker 不应照搬人为 sleep；删除该 option，让 projection 反映 Activity 的实际生命周期。
 
 ## 发布输入与平台配置
 
