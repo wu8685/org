@@ -10,7 +10,7 @@
 
 **Approved for implementation.** Per [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md), parallel-confirmation与Hello使用同一Org SDK hosted startup：从typed Definition构造canonical contract/digest，使用pending WorkerVersion绑定credential注册，accepted后才启动Temporal Worker polling。Sample不管理manifest artifact，也不自行传Tenant/Worker/version。
 
-可选generated JSON只做CI/debug/golden contract；真实E2E除既有idle action/restart/fork/join外，还须证明bootstrap exact retry不重复注册、registration后poller缺失不会Ready，并在poller + pinned verification成功后promotion。
+Per [`014-sample-slimming.md`](014-sample-slimming.md)，Sample repository不保留generator或checked-in generated contract；测试直接从typed Definition验证contract。真实E2E除既有idle action/restart/fork/join外，还须证明bootstrap exact retry不重复注册、registration后poller缺失不会Ready，并在poller + pinned verification成功后promotion。
 
 当前只授权规格与 README 设计。不得在 SDK 验证及 Hello 迁移完成前创建 Sample 实现。
 
@@ -62,7 +62,7 @@ approval-gate
 6. projection 同时展示两个 running nodes并保留 dependency。
 7. join 仅在两个实际 branch completed 后执行。
 8. Sample 无 raw Temporal import、手写 projection/Signal/metadata。
-9. startup构造的canonical contract与Definition、action schema、runtime bounds一致；可选generated JSON（若生成）只是其golden artifact。
+9. startup构造的canonical contract与Definition、action schema、runtime bounds一致；测试直接验证内存结果。
 10. 真实 E2E 覆盖 waiting → action → parallel → join → completed 及 Worker restart。
 
 ## README 设计

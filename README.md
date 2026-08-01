@@ -78,6 +78,7 @@ Temporal Web只用于高级诊断。普通用户不需要知道Task Queue、Sign
 ## 文档导航
 
 - [Getting Started](docs/getting-started.md)
+- [Publish a WorkerVersion](docs/api/publish-worker-version.md)
 - [Sample learning path](samples/README.md)
 - [Architecture Overview](docs/architecture/overview.md)
 - [Development and local E2E](docs/development.md)

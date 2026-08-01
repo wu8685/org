@@ -26,7 +26,8 @@ Implemented and covered by tests:
 - `samples/hello`: minimal sequential typed Workflow, migrated off raw Temporal authoring;
 - `samples/parallel-confirmation`: idle approval gate, authorized action, dynamic two-branch fork/join, Worker restart and action reconciliation;
 - `samples/dynamic-decision`: recorded Activity result selects one branch, exposes the unselected candidate as `skipped`, and converges at finalize.
-- all three Samples are self-contained Worker repositories with their own versioned Go module, Makefile, Docker context, build/push/kind scripts, release example and value-first README; root targets only delegate;
+- all three Samples are self-contained Worker repositories with their own versioned Go module, Makefile, Docker context, build/push/kind scripts and value-first README; the publish request example is centralized under `docs/api`, and root targets only delegate;
+- Sample repositories no longer contain a manifest generator, checked-in generated contract, control-plane publish body or redundant local runtime-config wrapper; SDK host-entrypoint simplification remains a separate follow-up;
 - Tenant-derived Console HTTP/JSON API with stable errors, CSRF, request IDs, overview/quota read model, Worker/Version/Workflow/Run resources, async publish polling, revision-safe description updates, Current/historical Run starts, cancel, projection-constrained Gateway actions and action outcome polling;
 - Go server-rendered Console with progressive JavaScript, approved calm console visual language, read-only generated contract display, responsive resource tables, runtime dependency-driven DAG layout, equivalent mobile structured node list and persistent delivery-unknown action feedback;
 - loopback-only local Console executable with server-configured development Tenant/principal identity; request headers cannot override Tenant.
@@ -44,5 +45,6 @@ Latest local verification on 2026-08-01:
 - `make e2e-local`, `make parallel-e2e-local`, and `make dynamic-e2e-local` passed against the running local Temporal service and `kind-org`;
 - automatic cleanup removed each test platform Kubernetes Namespace and test-created image.
 - copied-directory independence tests, real standalone Docker builds, registry-digest push contract tests, documentation links/terminology checks and Sample-directory-owned kind-load paths passed.
+- Sample slimming acceptance passed after removing obsolete artifacts: centralized publish-contract validation, stale-path checks, all three copied modules, and all three real kind + Temporal paths remain green.
 
 The project does not claim exactly-once external effects. The safety contract requires downstream idempotency or an explicit reconciliation/compensation policy for ambiguous write outcomes.

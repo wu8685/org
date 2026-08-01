@@ -405,6 +405,8 @@ Publish form移除 manifest file picker、digest input和editable/read-only pre-
 
 ## Optional generated JSON artifact
 
+Per [`014-sample-slimming.md`](014-sample-slimming.md)，org维护的三个用户Sample不提供generator，也不check in该artifact。以下能力只描述可选SDK/CI tooling，不构成Sample目录或用户发布路径。
+
 SDK tooling可以选择输出deterministic JSON artifact，但hosted startup、publish API与promotion都不依赖该文件。它只服务于：
 
 - CI golden diff、schema/policy lint与code review；

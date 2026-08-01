@@ -79,10 +79,10 @@ make kind-load \
 
 Org SDK在Worker启动时从typed Definition生成contract并自动注册。用户不管理contract artifact，Console只读展示注册结果。
 
-## 哪些配置由平台注入
+## 发布输入与平台配置
 
-部署时org平台注入bootstrap endpoint/token、Pod identity、Temporal连接、Task Queue、Worker Deployment和Build ID。它们不是用户填写的`.env`配置，也不得打进image或提交到Git。
+部署时org平台注入执行连接、候选Pod identity和一次性注册材料。它们不是用户填写的`.env`配置，也不得打进image或提交到Git。
 
-用户只维护业务Definition/Activities、image repository、release description、resource配置、Secret reference和source provenance。示例发布body见`config/release.example.json`。
+用户只维护业务Definition/Activities和image。Version description、resources、Secret reference与source provenance通过org发布接口提交；完整字段说明见 [Publish a WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
 
 真实write Activity必须使用stable idempotency key，或声明reconciliation/compensation policy；平台不声称外部效果exactly once。

@@ -77,6 +77,8 @@ make push \
 
 ## 5. 发布 WorkerVersion
 
+字段与HTTP请求示例见 [Publish a WorkerVersion](api/publish-worker-version.md)。Console与API使用同一份digest-only契约。
+
 在Console中：
 
 1. 创建Worker `hello-worker`；

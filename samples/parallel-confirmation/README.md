@@ -65,8 +65,8 @@ Gateway会校验Tenant、permission、input schema、projection revision与`Idem
 
 Org SDK在Worker启动时从typed Definition生成contract并自动注册。Console不接收用户提供的contract文件。
 
-## 哪些配置由平台注入
+## 发布输入与平台配置
 
-org平台注入bootstrap endpoint/token、Pod identity、Temporal连接、Task Queue、Worker Deployment和Build ID。用户不手填这些值，不创建credential文件，也不把它们写进image。
+org平台注入执行连接、候选Pod identity和一次性注册材料。用户不手填这些值，不创建credential文件，也不把它们写进image。
 
-用户只维护业务Definition/Activities、image与release输入。发布body示例见`config/release.example.json`。真实write Activity必须声明stable idempotency key或reconciliation/compensation policy。
+用户只维护业务Definition/Activities和image；Version的发布字段由org API承接，详见 [Publish a WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。真实write Activity必须声明stable idempotency key或reconciliation/compensation policy。

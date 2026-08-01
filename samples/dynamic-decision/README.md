@@ -49,7 +49,7 @@ make push \
 make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
 ```
 
-成功后复制`IMAGE_DIGEST=<repository>@sha256:...`。构建只使用当前repository；根级generator与org私有源码不是前置条件。
+成功后复制`IMAGE_DIGEST=<repository>@sha256:...`。构建只使用当前repository；org私有源码不是前置条件。
 
 ## 在org中运行
 
@@ -61,8 +61,8 @@ make kind-load VERSION=2026.08.1 COMMIT=$(git rev-parse --short=12 HEAD)
 
 Org SDK从typed Definition生成contract并在启动时自动注册。Console只读展示contract和动态DAG，不从Temporal Event History猜路径。
 
-## 哪些配置由平台注入
+## 发布输入与平台配置
 
-org平台注入bootstrap endpoint/token、Pod identity、Temporal连接、Task Queue、Worker Deployment和Build ID。用户不手填这些值，也不把credential或routing写进image。
+org平台注入执行连接、候选Pod identity和一次性注册材料。用户不手填这些值，也不把credential或routing写进image。
 
-用户只维护业务Definition/Activities、image与release输入。发布body示例见`config/release.example.json`。Secret或敏感input不得进入projection、log或Audit。
+用户只维护业务Definition/Activities和image；Version的发布字段由org API承接，详见 [Publish a WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。Secret或敏感input不得进入projection、log或Audit。

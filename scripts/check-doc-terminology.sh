@@ -15,12 +15,14 @@ docs/specs/010-workflow-execution-risk-defense.md
 docs/specs/011-console-ui-http-api.md
 docs/specs/012-worker-bootstrap-registration.md
 docs/specs/013-sample-repository-independence.md
+docs/specs/014-sample-slimming.md
 docs/ui-sdd-input.md
 docs/development.md
 docs/implementation-status.md
 README.md
 docs/getting-started.md
 docs/architecture/overview.md
+docs/api/publish-worker-version.md
 samples/README.md
 samples/hello/README.md
 samples/parallel-confirmation/README.md

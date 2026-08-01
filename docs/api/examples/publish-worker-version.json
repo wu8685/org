@@ -1,0 +1,17 @@
+{
+  "version": "2026.08.1",
+  "description": "Adds a validated business workflow release.",
+  "image": "registry.example.com/team/worker@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "versionConfig": {},
+  "runtime": {
+    "cpu": "100m",
+    "memory": "128Mi",
+    "environment": []
+  },
+  "source": {
+    "repository": "https://github.com/example/worker",
+    "branch": "main",
+    "commit": "000000000000",
+    "ciReference": "build-1"
+  }
+}

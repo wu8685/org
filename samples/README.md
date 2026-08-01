@@ -30,6 +30,8 @@ make push \
 
 两条image路径都输出`IMAGE_DIGEST=<repository>@sha256:...`。在org Console创建对应Worker并发布Version，候选Pod会通过Org SDK自动注册contract；用户不提供contract文件。
 
+Version发布字段和digest-only请求契约见 [Publish a WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。Sample repository不保存控制面请求body。
+
 平台注入bootstrap、Temporal连接和routing配置。Sample repository只拥有业务Definition、Activities、image构建与release输入。不要把Secret写进image、Workflow input、projection、log或Audit。
 
 完整本地环境与发布步骤见 [Getting Started](../docs/getting-started.md)。

@@ -41,7 +41,6 @@ cmd/worker/main.go
 scripts/build-image.sh
 scripts/push-image.sh
 scripts/kind-load.sh
-config/release.example.json
 tests...
 ```
 
@@ -52,11 +51,11 @@ tests...
 - Sample source 只能 import versioned public Org SDK package，不得 import `internal/`、root test harness 或 root generator。
 - `go.mod` 必须使用 Go module 可解析的明确 SDK version；禁止 `replace github.com/wu8685/org => ../..` 或其他 parent-directory replace。
 - 当前尚无稳定 SemVer SDK tag时，允许 pin 到已发布 commit 的标准 Go pseudo-version。后续 SDK tag发布后按 SDK compatibility policy升级，不使用浮动 branch。
-- 可选 generated contract JSON 只用于 CI/debug/golden diff，不参与 image startup、publish request 或 Console input；删除它不得破坏 test/build/run。
+- Sample repository不保存generated contract JSON；contract测试直接从typed Definition验证内存结果。
 - README 的相对链接必须在独立复制后仍有效；需要引用平台文档时使用稳定公开 URL，不能依赖 `../../docs`。
 - Sample 不使用 symlink 引用目录外文件。
 
-`config/release.example.json` 只展示用户发布 WorkerVersion 时拥有的 release 输入：version、version-level description、immutable image digest placeholder、version config、resource requests/limits与source provenance。它不得包含 Tenant ID、Task Queue、platform Temporal Namespace、platform Kubernetes Namespace、manifest、bootstrap token、Secret value或服务端派生名称，也不得作为控制面的新契约来源。
+Per [`014-sample-slimming.md`](014-sample-slimming.md)，完整WorkerVersion publish request由org主项目的`docs/api`承接，不保存在用户Worker repository。Sample README只链接公开文档并说明本Sample的Worker、Workflow、input与建议resources。
 
 ## Sample Makefile contract
 
@@ -139,7 +138,7 @@ README不要求上传manifest，不提供direct Temporal Signal/Task Queue操作
 4. source/go.mod/scripts/Dockerfile/README不包含parent replace、`repo_root`、`COPY sdk`、`COPY samples/`、root Makefile target或`../../docs`依赖。
 5. `docker build`只接收复制后的目录作为context并生成Worker binary image。
 6. `make kind-load`在`kind-org`输出digest reference；该digest可被org pending WorkerVersion部署并完成bootstrap registration。
-7. 删除可选`generated/`后重复test与image build仍成功。
+7. 检查repository不含generator、generated contract或control-plane publish body。
 8. `git init && git add .`可形成自包含repository，不出现broken symlink或缺失tracked input。
 
 ## TDD 与真实验收顺序
@@ -161,11 +160,11 @@ README不要求上传manifest，不提供direct Temporal Signal/Task Queue操作
 
 2026-08-01实施结果：
 
-- 三个Sample均拥有自己的Makefile、versioned `go.mod`、local-context Dockerfile、build/push/kind scripts与release example；
+- 三个Sample均拥有自己的Makefile、versioned `go.mod`、local-context Dockerfile、build/push/kind scripts与value-first README；
 - 将任一Sample单独复制到空目录后，`GOWORK=off make test`与module resolution通过，不读取org parent；
 - fake Docker contract tests证明image/push target只使用Sample root context，并从registry结果输出immutable digest；
 - 三个Sample分别完成真实Docker build；
 - org E2E harness直接从各Sample目录执行`make kind-load`，Hello、parallel-confirmation与dynamic-decision均通过真实`kind-org` + Temporal publish/bootstrap/Run验收；
 - root sample targets只调用`$(MAKE) -C samples/<sample>`，不再拥有build/digest逻辑；
 - root README、Getting Started、architecture overview、learning path与三个独立README已加入术语、链接和publish-contract tests；
-- 可选generated JSON仍只用于debug/golden，正常test/build/publish/bootstrap不依赖它。
+- generated contract与publish request均不保存在Sample repository；contract测试直接验证typed Definition，publish示例集中在org `docs/api`。

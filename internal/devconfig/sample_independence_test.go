@@ -19,7 +19,7 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 	for _, sample := range []string{"hello", "parallel-confirmation", "dynamic-decision"} {
 		t.Run(sample, func(t *testing.T) {
 			dir := filepath.Join(root, "samples", sample)
-			for _, relative := range []string{"Makefile", "README.md", "go.mod", "go.sum", "Dockerfile", "scripts/build-image.sh", "scripts/push-image.sh", "scripts/kind-load.sh", "config/release.example.json"} {
+			for _, relative := range []string{"Makefile", "README.md", "go.mod", "go.sum", "Dockerfile", "scripts/build-image.sh", "scripts/push-image.sh", "scripts/kind-load.sh"} {
 				info, err := os.Lstat(filepath.Join(dir, relative))
 				if err != nil {
 					t.Errorf("missing independent repository file %s: %v", relative, err)
@@ -27,6 +27,11 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 				}
 				if info.Mode()&os.ModeSymlink != 0 {
 					t.Errorf("%s must not be a symlink", relative)
+				}
+			}
+			for _, relative := range []string{"cmd/generate-manifest", "generated", "config", "config.go", "config_test.go"} {
+				if _, err := os.Lstat(filepath.Join(dir, relative)); !os.IsNotExist(err) {
+					t.Errorf("slim Sample retains obsolete path %s", relative)
 				}
 			}
 
@@ -58,7 +63,7 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 					t.Errorf("README missing %q", want)
 				}
 			}
-			for _, forbidden := range []string{"../../docs", "make sample-test", "make parallel-sample", "make dynamic-sample", "manifest upload", "上传 manifest"} {
+			for _, forbidden := range []string{"../../docs", "make sample-test", "make parallel-sample", "make dynamic-sample", "manifest", "Task Queue", "Build ID", "TEMPORAL_", "config/release.example.json"} {
 				if strings.Contains(readme, forbidden) {
 					t.Errorf("README retains repository/platform dependency %q", forbidden)
 				}
@@ -67,33 +72,25 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 	}
 }
 
-func TestSampleReleaseExamplesMatchDigestOnlyPublishContract(t *testing.T) {
+func TestCentralPublishExampleMatchesDigestOnlyContract(t *testing.T) {
 	root := filepath.Join("..", "..")
-	for _, sample := range []struct{ directory, worker string }{
-		{"hello", "hello-worker"},
-		{"parallel-confirmation", "parallel-confirmation-worker"},
-		{"dynamic-decision", "dynamic-decision-worker"},
-	} {
-		t.Run(sample.directory, func(t *testing.T) {
-			contents := read(t, filepath.Join(root, "samples", sample.directory, "config", "release.example.json"))
-			var request domain.WorkerVersionPublishRequest
-			if err := json.Unmarshal([]byte(contents), &request); err != nil {
-				t.Fatal(err)
-			}
-			request.WorkerName = sample.worker
-			if err := domain.ValidateWorkerVersionPublish(request, []string{"registry.example.com"}); err != nil {
-				t.Fatalf("release example does not match publish contract: %v", err)
-			}
-			for _, forbidden := range []string{"tenantId", "tenantSlug", "scope", "workerName", "manifest", "metadata", "contract", "bootstrap", "taskQueue", "temporalNamespace", "kubernetesNamespace"} {
-				if strings.Contains(contents, `"`+forbidden+`"`) {
-					t.Errorf("release example contains server-owned field %q", forbidden)
-				}
-			}
-		})
+	contents := read(t, filepath.Join(root, "docs", "api", "examples", "publish-worker-version.json"))
+	var request domain.WorkerVersionPublishRequest
+	if err := json.Unmarshal([]byte(contents), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.WorkerName = "hello-worker"
+	if err := domain.ValidateWorkerVersionPublish(request, []string{"registry.example.com"}); err != nil {
+		t.Fatalf("release example does not match publish contract: %v", err)
+	}
+	for _, forbidden := range []string{"tenantId", "tenantSlug", "scope", "workerName", "manifest", "metadata", "contract", "bootstrap", "taskQueue", "temporalNamespace", "kubernetesNamespace"} {
+		if strings.Contains(contents, `"`+forbidden+`"`) {
+			t.Errorf("release example contains server-owned field %q", forbidden)
+		}
 	}
 }
 
-func TestCopiedSamplesResolveAndTestWithoutOrgParent(t *testing.T) {
+func TestCopiedSamplesVerifyWithoutOrgParent(t *testing.T) {
 	root := filepath.Join("..", "..")
 	for _, sample := range []string{"hello", "parallel-confirmation", "dynamic-decision"} {
 		t.Run(sample, func(t *testing.T) {
@@ -101,14 +98,11 @@ func TestCopiedSamplesResolveAndTestWithoutOrgParent(t *testing.T) {
 			if err := os.CopyFS(destination, os.DirFS(filepath.Join(root, "samples", sample))); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.RemoveAll(filepath.Join(destination, "generated")); err != nil {
-				t.Fatal(err)
-			}
-			command := exec.Command("make", "test")
+			command := exec.Command("make", "verify")
 			command.Dir = destination
 			command.Env = append(os.Environ(), "GOWORK=off")
 			if output, err := command.CombinedOutput(); err != nil {
-				t.Fatalf("copied Sample test: %v\n%s", err, output)
+				t.Fatalf("copied Sample verify: %v\n%s", err, output)
 			}
 		})
 	}
@@ -184,10 +178,11 @@ func TestRootSampleTargetsOnlyDelegateToSampleMakefiles(t *testing.T) {
 func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	root := filepath.Join("..", "..")
 	files := map[string][]string{
-		"README.md":                     {"Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/getting-started.md", "docs/architecture/overview.md", "samples/README.md"},
-		"docs/getting-started.md":       {"kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run"},
-		"docs/architecture/overview.md": {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
-		"samples/README.md":             {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
+		"README.md":                          {"Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/getting-started.md", "docs/architecture/overview.md", "samples/README.md"},
+		"docs/getting-started.md":            {"kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "api/publish-worker-version.md"},
+		"docs/api/publish-worker-version.md": {"POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "source"},
+		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
+		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
 	}
 	for relative, wants := range files {
 		text := read(t, filepath.Join(root, relative))
@@ -199,10 +194,28 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	}
 }
 
+func TestApprovedDocsDoNotRetainRemovedSampleArtifactPaths(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, relative := range []string{
+		"README.md", "docs/getting-started.md", "samples/README.md",
+		"docs/specs/006-org-sdk.md", "docs/specs/007-hello-org-sdk-sample.md",
+		"docs/specs/008-parallel-confirmation-org-sdk-sample.md", "docs/specs/009-dynamic-decision-org-sdk-sample.md",
+		"docs/specs/012-worker-bootstrap-registration.md", "docs/specs/013-sample-repository-independence.md",
+		"samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md",
+	} {
+		contents := read(t, filepath.Join(root, relative))
+		for _, forbidden := range []string{"cmd/generate-manifest", "generated/org-worker-manifest.json", "config/release.example.json"} {
+			if strings.Contains(contents, forbidden) {
+				t.Errorf("%s retains removed Sample path %q", relative, forbidden)
+			}
+		}
+	}
+}
+
 func TestUserDocumentationLocalLinksResolve(t *testing.T) {
 	root := filepath.Join("..", "..")
 	linkPattern := regexp.MustCompile(`\[[^]]+\]\(([^)]+)\)`)
-	for _, relative := range []string{"README.md", "docs/getting-started.md", "docs/architecture/overview.md", "samples/README.md"} {
+	for _, relative := range []string{"README.md", "docs/getting-started.md", "docs/api/publish-worker-version.md", "docs/architecture/overview.md", "samples/README.md"} {
 		text := read(t, filepath.Join(root, relative))
 		for _, match := range linkPattern.FindAllStringSubmatch(text, -1) {
 			target := strings.TrimSpace(match[1])

@@ -10,7 +10,7 @@
 
 **Approved for implementation.** Per [`012-worker-bootstrap-registration.md`](012-worker-bootstrap-registration.md), dynamic-decision使用Org SDK hosted startup从typed Definition在内存构造canonical contract/digest，经bound bootstrap credential幂等注册，accepted后才启动Temporal Worker polling。Sample与用户均不选择、上传或读取manifest file。
 
-可选generated JSON保留为CI/debug/golden artifact而非发布输入。真实E2E继续验证两条runtime route与`skipped`projection，并新增registration identity/image/protocol binding、restart exact retry与poller/probe promotion gate。
+Per [`014-sample-slimming.md`](014-sample-slimming.md)，Sample repository不保留generator或checked-in generated contract；测试直接从typed Definition验证contract。真实E2E继续验证两条runtime route与`skipped`projection，并新增registration identity/image/protocol binding、restart exact retry与poller/probe promotion gate。
 
 当前只授权规格与 README 设计。它是三个 Sample 中最后实施的一项。
 
@@ -58,7 +58,7 @@ Input 包含一个简单 `mode`；合法值映射为 `concise` / `detailed`。�
 5. invalid route 产生稳定 failure projection，不偷偷选择 fallback。
 6. finalize 只在合法 selected branch terminal 后执行。
 7. Sample 无 raw Temporal import、手写 projection/Signal/metadata。
-8. startup构造的canonical contract声明两个candidate templates、route schema与bounds；可选generated JSON（若生成）只用于golden diff。
+8. startup构造的canonical contract声明两个candidate templates、route schema与bounds；测试直接验证内存结果。
 9. unit tests 不用 wall-clock 推断路径；真实 E2E 分别运行两个 route 并读取 projection。
 
 ## README 设计
