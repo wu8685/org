@@ -38,14 +38,18 @@ button { cursor: pointer; }
 .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--fg); color: white; font: 12px var(--mono); }
 .shell { min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 10; min-height: 66px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--border); background: rgb(250 250 250 / 92%); backdrop-filter: blur(10px); }
-.tenant-identity { display: flex; gap: 10px; align-items: center; }
-.tenant-identity strong, .tenant-identity span { display: block; }
-.tenant-identity span { color: var(--muted); font-size: 11px; }
+.tenant-switch { display: grid; grid-template-columns: 28px minmax(180px, 280px) auto; column-gap: 10px; align-items: center; }
+.tenant-switch label { display: grid; gap: 2px; color: var(--muted); font-size: 11px; }
+.tenant-switch select { min-height: 32px; padding: 4px 28px 4px 8px; color: var(--fg); font-weight: 650; }
+.tenant-stable-id { color: var(--muted); font: 11px var(--mono); }
+.tenant-switch-status { grid-column: 2 / -1; min-height: 1em; color: var(--muted); font-size: 11px; }
 .tenant-icon { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: var(--fg); color: white; font: 11px var(--mono); }
 .icon-button { min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .content { max-width: 1240px; margin: 0 auto; padding: 32px 24px 80px; }
 .page-heading { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
-.eyebrow { margin: 0 0 8px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+.eyebrow, .breadcrumb { margin: 0 0 8px; color: var(--muted); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+.breadcrumb { display: flex; gap: 7px; flex-wrap: wrap; }
+.breadcrumb a:hover { color: var(--accent); }
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 8px; font-size: clamp(27px, 3vw, 34px); line-height: 1.15; letter-spacing: -.02em; }
 h2 { margin-bottom: 16px; font-size: 19px; }
@@ -144,6 +148,9 @@ textarea { min-height: 112px; resize: vertical; font-family: var(--mono); font-s
   .nav { grid-template-columns: repeat(4, 1fr); }
   .nav a { min-height: 52px; justify-content: center; padding: 2px 4px; }
   .topbar { min-height: 58px; padding-inline: 12px; }
+	.tenant-switch { grid-template-columns: 24px minmax(150px, 1fr); }
+	.tenant-stable-id { grid-column: 2; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.tenant-switch-status { grid-column: 2; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .content { padding: 24px 12px 56px; }
   .page-heading { display: block; margin-bottom: 24px; }
   .heading-actions { margin-top: 16px; }

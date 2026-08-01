@@ -86,7 +86,7 @@ ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev
 
 ### 检查点
 
-页面侧边栏应显示总览、Workers、Workflows 和 Runs。此时列表为空是正常的。
+页面顶部应显示当前 Tenant `Local Development` 及稳定标识，侧边栏应显示总览、Workers、Workflows 和 Runs。总览中的 quota 与后续所有资源都属于这个当前 Tenant；此时列表为空是正常的。
 
 ## 第 4 步：构建 Hello Worker
 

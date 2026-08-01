@@ -39,12 +39,18 @@ func TestConsoleRoutesRenderAuthenticatedServerShellWithoutUnsupportedProductCon
 }
 
 func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t *testing.T) {
-	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
+	identity := testIdentity()
+	identity.AuthorizedTenants = []TenantMembership{
+		{TenantID: "tenant-a", TenantSlug: "alpha", DisplayName: "Alpha Studio"},
+		{TenantID: "tenant-b", TenantSlug: "beta", DisplayName: "Beta Studio"},
+	}
+	handler := New(Config{Authenticator: stubAuthenticator{identity: identity}, ControlPlane: &stubControlPlane{}})
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/inv-1", nil))
 	body := response.Body.String()
 	for _, want := range []string{
 		`data-dag-canvas`, `data-dag-list`, `aria-live="polite"`, `data-action-dialog`,
+		`data-tenant-switch`, `name="tenantSlug"`, `aria-label="切换当前 Tenant"`, `data-tenant-switch-status`, `aria-label="breadcrumb"`, `Tenant stable ID`,
 		`data-contract-readonly`, `data-schema-fields`, `data-worker-dialog`, `data-worker-form`,
 		`data-worker-error`, `aria-describedby="worker-name-help worker-name-error"`,
 		`data-trigger-payload`, `data-trigger-error`, `data-trigger-schema-reference`, `data-trigger-example`,
@@ -67,6 +73,29 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 	}
 }
 
+func TestConsoleSingleTenantUsesStaticIdentityAndResourceBreadcrumbsEncodeHierarchy(t *testing.T) {
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
+
+	overview := httptest.NewRecorder()
+	handler.ServeHTTP(overview, httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(overview.Body.String(), `name="tenantSlug"`) || !strings.Contains(overview.Body.String(), `data-tenant-identity`) {
+		t.Fatalf("single-Tenant shell must render static identity without selector: %s", overview.Body.String())
+	}
+
+	workflow := httptest.NewRecorder()
+	handler.ServeHTTP(workflow, httptest.NewRequest(http.MethodGet, "/workers/hello-worker/versions/v1/workflows/HelloWorkflow", nil))
+	body := workflow.Body.String()
+	ordered := []string{`Tenant: Alpha Studio`, `>Workers<`, `>hello-worker<`, `>Versions<`, `>v1<`, `>Workflows<`, `>HelloWorkflow<`}
+	position := -1
+	for _, want := range ordered {
+		next := strings.Index(body[position+1:], want)
+		if next < 0 {
+			t.Fatalf("resource breadcrumb missing %q: %s", want, body)
+		}
+		position += next + 1
+	}
+}
+
 func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLayout(t *testing.T) {
 	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
 	checks := []struct {
@@ -75,7 +104,7 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 	}{
 		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", "prefers-reduced-motion"}},
 		{"/assets/yaml-renderer.js", []string{"YAML display unavailable", "MAX_DEPTH", "MAX_OUTPUT", "Object.keys(value).sort()", "module.exports", "canonicalJSON", "YAML parse error", "custom tags, anchors, aliases, and merge keys are disabled"}},
-		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError"}},
+		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run"}},
 	}
 	for _, check := range checks {
 		response := httptest.NewRecorder()
@@ -114,6 +143,14 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 					t.Fatalf("GET %s retains schema-derived Trigger fields or JSON-only parsing %q", check.path, forbidden)
 				}
 			}
+			for _, forbidden := range []string{`tenantId:`, `?tenantId=`, `/tenants/${`} {
+				if strings.Contains(response.Body.String(), forbidden) {
+					t.Fatalf("GET %s allows client-controlled Tenant routing %q", check.path, forbidden)
+				}
+			}
+		}
+		if check.path == "/assets/app.css" && strings.Contains(response.Body.String(), ".tenant-stable-id { display: none; }") {
+			t.Fatal("mobile layout must keep the current Tenant stable identifier visible")
 		}
 	}
 }

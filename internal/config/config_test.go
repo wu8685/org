@@ -62,3 +62,33 @@ func TestConsoleDevelopmentIdentityIsConfigurableWithoutRequestTenantHeaders(t *
 		t.Fatalf("config=%#v", cfg)
 	}
 }
+
+func TestConsoleAuthorizedTenantMembershipsAreServerConfigured(t *testing.T) {
+	env := map[string]string{
+		"ORG_CONSOLE_TENANTS": `[{"id":"tenant-a","slug":"alpha","displayName":"Alpha Studio"},{"id":"tenant-b","slug":"beta","displayName":"Beta Studio"}]`,
+	}
+	cfg, err := Load(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.ConsoleTenants) != 2 || cfg.ConsoleTenants[0].ID != "tenant-a" || cfg.ConsoleTenantID != "tenant-a" || cfg.ConsoleTenantSlug != "alpha" {
+		t.Fatalf("configured Tenant memberships=%#v default=%#v", cfg.ConsoleTenants, cfg)
+	}
+}
+
+func TestConsoleAuthorizedTenantMembershipsRejectUnknownFieldsAndDuplicateIdentity(t *testing.T) {
+	for _, value := range []string{
+		`[{"id":"tenant-a","slug":"alpha","displayName":"Alpha","tenantId":"forged"}]`,
+		`[{"id":"tenant-a","slug":"alpha","displayName":"Alpha"},{"id":"tenant-a","slug":"beta","displayName":"Beta"}]`,
+		`[{"id":"tenant-a","slug":"same","displayName":"Alpha"},{"id":"tenant-b","slug":"same","displayName":"Beta"}]`,
+	} {
+		if _, err := Load(func(key string) string {
+			if key == "ORG_CONSOLE_TENANTS" {
+				return value
+			}
+			return ""
+		}); err == nil {
+			t.Fatalf("invalid membership catalog accepted: %s", value)
+		}
+	}
+}

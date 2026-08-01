@@ -26,19 +26,19 @@ func consoleRoute(path string) (consolePage, bool) {
 	case path == "/":
 		return consolePage{Page: "overview", Title: "总览", Description: "查看当前 Tenant 的运行概况与资源使用。"}, true
 	case path == "/workers":
-		return consolePage{Page: "workers", Title: "Workers", Description: "管理逻辑 Worker 及其独立版本。"}, true
+		return consolePage{Page: "workers", Title: "Workers", Description: "管理当前 Tenant 的逻辑 Worker 及其独立版本。"}, true
 	case len(parts) == 2 && parts[0] == "workers" && parts[1] != "":
-		return consolePage{Page: "worker", Title: parts[1], Description: "查看 Worker 的 Current 版本、历史版本与最近 Runs。"}, true
+		return consolePage{Page: "worker", Title: parts[1], Description: "查看当前 Tenant 中该 Worker 的 Current 版本、历史版本与最近 Runs。"}, true
 	case len(parts) == 4 && parts[0] == "workers" && parts[1] != "" && parts[2] == "versions" && parts[3] != "":
-		return consolePage{Page: "version", Title: parts[1] + " · " + parts[3], Description: "查看 release、部署健康与经验证的只读 contract。"}, true
+		return consolePage{Page: "version", Title: parts[1] + " · " + parts[3], Description: "查看当前 Tenant 中的 release、部署健康与经验证的只读 contract。"}, true
 	case path == "/workflows":
-		return consolePage{Page: "workflows", Title: "Workflows", Description: "按 Worker 与版本浏览并启动 Workflow。"}, true
+		return consolePage{Page: "workflows", Title: "Workflows", Description: "在当前 Tenant 下按 Worker 与版本浏览并启动 Workflow。"}, true
 	case len(parts) == 6 && parts[0] == "workers" && parts[1] != "" && parts[2] == "versions" && parts[3] != "" && parts[4] == "workflows" && parts[5] != "":
-		return consolePage{Page: "workflow", Title: parts[5], Description: "检查只读输入 contract，选择版本并启动独立 Run。"}, true
+		return consolePage{Page: "workflow", Title: parts[5], Description: "在当前 Tenant 下检查只读输入 contract，选择版本并启动独立 Run。"}, true
 	case path == "/runs":
-		return consolePage{Page: "runs", Title: "Runs", Description: "查看 Workflow Run 与所选 WorkerVersion。"}, true
+		return consolePage{Page: "runs", Title: "Runs", Description: "查看当前 Tenant 的 Workflow Run 与所选 WorkerVersion。"}, true
 	case len(parts) == 2 && parts[0] == "runs" && parts[1] != "":
-		return consolePage{Page: "run", Title: parts[1], Description: "基于 Worker semantic projection 查看运行时 DAG。"}, true
+		return consolePage{Page: "run", Title: parts[1], Description: "基于当前 Tenant Worker 的 semantic projection 查看运行时 DAG。"}, true
 	default:
 		return consolePage{}, false
 	}

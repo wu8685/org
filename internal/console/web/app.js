@@ -14,6 +14,24 @@
   let actionContext = null;
   let runPoll = 0;
 
+  const tenantSwitch = document.querySelector("[data-tenant-switch]");
+  const tenantSwitchStatus = document.querySelector("[data-tenant-switch-status]");
+  tenantSwitch?.elements.tenantSlug.addEventListener("change", async event => {
+    const select = event.target;
+    const previous = tenantSwitch.dataset.currentTenant;
+    select.disabled = true;
+    tenantSwitchStatus.textContent = "正在切换 Tenant…";
+    try {
+      const result = await api("/api/v1/session/tenant", {method: "POST", body: JSON.stringify({tenantSlug: select.value})});
+      tenantSwitchStatus.textContent = "Tenant 已切换，正在刷新…";
+      location.href = result.redirect || "/";
+    } catch (error) {
+      select.value = previous;
+      select.disabled = false;
+      tenantSwitchStatus.textContent = error.message || "Tenant 切换失败。";
+    }
+  });
+
   document.querySelectorAll("[data-nav]").forEach(link => {
     const section = page === "worker" || page === "version" ? "workers" : page === "workflow" ? "workflows" : page === "run" ? "runs" : page;
     if (link.dataset.nav === section) link.setAttribute("aria-current", "page");
@@ -168,6 +186,7 @@
       metric("Concurrent runs", overview.quotaUsage.concurrentRuns, `上限 ${overview.quotaPolicy.maxConcurrentRuns}`),
     ]));
     content.append(section("Tenant quota", card(definition([
+	  ["Tenant context", `${overview.tenantId} · ${overview.tenantStatus}`],
       ["Active releases", `${overview.quotaUsage.activeReleases} / ${overview.quotaPolicy.maxActiveReleases}`],
       ["Worker Pods", `${overview.quotaUsage.activeWorkerPods} / ${overview.quotaPolicy.maxActiveWorkerPods}`],
       ["Reserved CPU", `${overview.quotaUsage.reservedCpuMilli}m / ${overview.quotaPolicy.maxReservedCPU}`],
@@ -237,7 +256,7 @@
       version.description,
       status(version.state),
       version.current ? "Current" : "Historical",
-    ])) : empty("还没有 WorkerVersion。")));
+    ])) : empty("当前 Tenant 还没有 WorkerVersion。")));
   }
 
   async function renderVersion() {
@@ -270,7 +289,7 @@
   async function renderWorkflows() {
     const {items} = await api("/api/v1/workflows");
     clear(content);
-    if (!items.length) return content.append(empty("没有 Ready WorkerVersion 提供 Workflow。"));
+    if (!items.length) return content.append(empty("当前 Tenant 没有 Ready WorkerVersion 提供 Workflow。"));
     content.append(el("div", {class: "grid-2"}, items.map(item => {
       const href = `/workers/${encodeURIComponent(item.workerName)}/versions/${encodeURIComponent(item.workerVersion)}/workflows/${encodeURIComponent(item.workflow.name)}`;
       return card([el("p", {class: "eyebrow", text: `${item.workerName} · ${item.current ? "Current" : "Historical"}`}), el("h2", {}, link(item.workflow.name, href)), el("p", {class: "muted", text: item.versionDescription}), mono(item.workerVersion)]);
@@ -293,7 +312,7 @@
   async function renderRuns() {
     const {items} = await api("/api/v1/runs" + location.search);
     clear(content);
-    if (!items.length) return content.append(empty("当前筛选没有 Run。"));
+    if (!items.length) return content.append(empty("当前 Tenant 的筛选条件下没有 Run。"));
     content.append(table(["Run", "Description", "Worker", "Workflow", "Selected version", "Created"], items.map(run => [
       link(run.id, `/runs/${encodeURIComponent(run.id)}`), run.description || "—", run.workerName, run.workflow, mono(run.selectedVersion), new Date(run.createdAt).toLocaleString(),
     ])));

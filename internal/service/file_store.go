@@ -23,6 +23,7 @@ type fileState struct {
 	BootstrapCredentials map[string]domain.BootstrapCredential `json:"bootstrapCredentials"`
 	WorkerVersionRouting map[string]fileWorkerVersionRouting   `json:"workerVersionRouting"`
 	InvocationRouting    map[string]fileInvocationRouting      `json:"invocationRouting"`
+	TenantSelections     map[string]string                     `json:"tenantSelections"`
 }
 
 type fileWorkerVersionRouting struct {
@@ -43,7 +44,7 @@ func NewFileStore(path string) (*FileStore, error) {
 	if path == "" {
 		return nil, errors.New("state file path is required")
 	}
-	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}, WorkerVersionRouting: map[string]fileWorkerVersionRouting{}, InvocationRouting: map[string]fileInvocationRouting{}}}
+	s := &FileStore{path: path, state: fileState{Tenants: map[string]domain.Tenant{}, Workers: map[string]domain.Worker{}, WorkerVersions: map[string]domain.WorkerVersion{}, Invocations: map[string]domain.Invocation{}, Audits: map[string][]domain.AuditRecord{}, QuotaLeases: map[string]domain.QuotaLease{}, ActionOperations: map[string]domain.ActionOperation{}, PublishOperations: map[string]domain.PublishOperation{}, BootstrapCredentials: map[string]domain.BootstrapCredential{}, WorkerVersionRouting: map[string]fileWorkerVersionRouting{}, InvocationRouting: map[string]fileInvocationRouting{}, TenantSelections: map[string]string{}}}
 	s.persistSnapshot = s.writeSnapshot
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -87,6 +88,9 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	if s.state.InvocationRouting == nil {
 		s.state.InvocationRouting = map[string]fileInvocationRouting{}
+	}
+	if s.state.TenantSelections == nil {
+		s.state.TenantSelections = map[string]string{}
 	}
 	hydrateFileStateRouting(&s.state)
 	return s, nil
@@ -192,6 +196,25 @@ func (s *FileStore) AllTenants() []domain.Tenant {
 		out = append(out, tenant)
 	}
 	return out
+}
+
+func (s *FileStore) TenantSelection(sessionKey string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tenantID, ok := s.state.TenantSelections[sessionKey]
+	return tenantID, ok
+}
+
+func (s *FileStore) SaveTenantSelection(sessionKey, tenantID string) error {
+	if sessionKey == "" || tenantID == "" {
+		return errors.New("session key and Tenant identity are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mutate(func(next *fileState) error {
+		next.TenantSelections[sessionKey] = tenantID
+		return nil
+	})
 }
 func (s *FileStore) SaveWorker(tenantID string, worker domain.Worker) error {
 	if tenantID == "" || worker.TenantID != tenantID || worker.Name == "" {

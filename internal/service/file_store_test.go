@@ -48,6 +48,9 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	if _, err := store.UpdateWorkerVersionDescription(tenant.ID, worker.Name, "v1", 1, "Corrected release."); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveTenantSelection("local-session", tenant.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	reopened, err := NewFileStore(path)
 	if err != nil {
@@ -76,5 +79,8 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	}
 	if got, ok := reopened.BootstrapCredential(credential.TokenHash); !ok || got.Binding.WorkerVersionID != d.ID {
 		t.Fatalf("bootstrap credential = %#v, %v", got, ok)
+	}
+	if got, ok := reopened.TenantSelection("local-session"); !ok || got != tenant.ID {
+		t.Fatalf("Tenant selection = %q, %v", got, ok)
 	}
 }

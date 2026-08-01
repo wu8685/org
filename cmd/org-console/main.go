@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := ensureDevelopmentTenant(store, cfg); err != nil {
+	if err := ensureDevelopmentTenants(store, cfg); err != nil {
 		log.Fatal(err)
 	}
 	executor, err := temporalplatform.Dial(temporalplatform.Config{Address: cfg.TemporalAddress, Namespace: cfg.TemporalNamespace})
@@ -70,8 +70,16 @@ func main() {
 			log.Printf("invocation reconciler stopped: %v", err)
 		}
 	}()
+	authenticator, err := console.NewSessionAuthenticator(console.SessionAuthenticatorConfig{
+		PrincipalID: cfg.ConsolePrincipalID, SessionKey: "local-development:" + cfg.ConsolePrincipalID,
+		AuthenticationMethod: "local-development", CSRFToken: randomToken(), DefaultTenantID: cfg.ConsoleTenantID,
+		Memberships: developmentMemberships(cfg), SelectionStore: store,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	consoleHandler := console.New(console.Config{
-		Authenticator: console.StaticAuthenticator{Identity: developmentIdentity(cfg, randomToken())},
+		Authenticator: authenticator,
 		ControlPlane:  controlPlane,
 	})
 	mux := http.NewServeMux()
@@ -105,14 +113,44 @@ func ensureDevelopmentTenant(store tenantStore, cfg config.Config) error {
 	})
 }
 
-func developmentIdentity(cfg config.Config, csrfToken string) console.Identity {
-	permissions := map[string]bool{
+func ensureDevelopmentTenants(store tenantStore, cfg config.Config) error {
+	for _, configured := range cfg.ConsoleTenants {
+		if _, ok := store.Tenant(configured.ID); ok {
+			continue
+		}
+		now := time.Now().UTC()
+		if err := store.SaveTenant(domain.Tenant{
+			ID: configured.ID, Slug: configured.Slug, DisplayName: configured.DisplayName,
+			Status: domain.TenantActive, QuotaPolicy: domain.DefaultTenantQuotaPolicy(), CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func developmentMemberships(cfg config.Config) []console.TenantMembership {
+	memberships := make([]console.TenantMembership, 0, len(cfg.ConsoleTenants))
+	for _, tenant := range cfg.ConsoleTenants {
+		memberships = append(memberships, console.TenantMembership{
+			TenantID: tenant.ID, TenantSlug: tenant.Slug, DisplayName: tenant.DisplayName, Permissions: developmentPermissions(),
+		})
+	}
+	return memberships
+}
+
+func developmentPermissions() map[string]bool {
+	return map[string]bool{
 		service.PermissionWorkerRead: true, service.PermissionWorkerCreate: true, service.PermissionWorkerDeploy: true,
 		service.PermissionWorkerVersionUpdate: true, service.PermissionRunStart: true, service.PermissionRunRead: true,
 		service.PermissionRunSignal: true, service.PermissionRunQuery: true, service.PermissionRunCancel: true,
 		service.PermissionDiagnosticsRead: true, service.PermissionAuditRead: true, service.PermissionTenantAdmin: true,
 		"run:action:confirm": true,
 	}
+}
+
+func developmentIdentity(cfg config.Config, csrfToken string) console.Identity {
+	permissions := developmentPermissions()
 	return console.Identity{
 		Auth: service.AuthenticatedContext{
 			PrincipalID: cfg.ConsolePrincipalID, TenantID: cfg.ConsoleTenantID, TenantSlug: cfg.ConsoleTenantSlug,

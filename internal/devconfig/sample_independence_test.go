@@ -205,10 +205,22 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		"README.md":                          {"Agent", "写 code", "自定义流程", "动态加载和注册", "Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/README.md", "docs/getting-started.md", "docs/concepts.md", "samples/README.md"},
 		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "architecture/overview.md", "development.md", "specs/"},
 		"docs/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
-		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md"},
+		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md", "Local Development", "当前 Tenant"},
 		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
 		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
 		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
+	}
+	development := read(t, filepath.Join(root, "docs", "development.md"))
+	for _, want := range []string{"ORG_CONSOLE_TENANTS", "authorized Tenant", "server-side", "刷新", "重启"} {
+		if !strings.Contains(development, want) {
+			t.Errorf("docs/development.md missing Tenant selection guidance %q", want)
+		}
+	}
+	status := read(t, filepath.Join(root, "docs", "implementation-status.md"))
+	for _, want := range []string{"Tenant selector", "authorized memberships", "durable session selection"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("docs/implementation-status.md missing Tenant Console milestone %q", want)
+		}
 	}
 	for relative, wants := range files {
 		text := read(t, filepath.Join(root, relative))

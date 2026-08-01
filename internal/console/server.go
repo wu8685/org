@@ -24,6 +24,113 @@ type Identity struct {
 	Auth              service.AuthenticatedContext
 	TenantDisplayName string
 	CSRFToken         string
+	AuthorizedTenants []TenantMembership
+}
+
+type TenantMembership struct {
+	TenantID    string
+	TenantSlug  string
+	DisplayName string
+	Permissions map[string]bool
+}
+
+type TenantSelectionStore interface {
+	TenantSelection(string) (string, bool)
+	SaveTenantSelection(string, string) error
+}
+
+type SessionAuthenticatorConfig struct {
+	PrincipalID          string
+	SessionKey           string
+	AuthenticationMethod string
+	CSRFToken            string
+	DefaultTenantID      string
+	Memberships          []TenantMembership
+	SelectionStore       TenantSelectionStore
+}
+
+type SessionAuthenticator struct {
+	config        SessionAuthenticatorConfig
+	membersByID   map[string]TenantMembership
+	membersBySlug map[string]TenantMembership
+}
+
+func NewSessionAuthenticator(config SessionAuthenticatorConfig) (*SessionAuthenticator, error) {
+	if config.PrincipalID == "" || config.SessionKey == "" || config.AuthenticationMethod == "" || config.CSRFToken == "" || config.DefaultTenantID == "" || config.SelectionStore == nil {
+		return nil, errors.New("complete authenticated session configuration is required")
+	}
+	authenticator := &SessionAuthenticator{config: config, membersByID: map[string]TenantMembership{}, membersBySlug: map[string]TenantMembership{}}
+	for _, membership := range config.Memberships {
+		if membership.TenantID == "" || membership.TenantSlug == "" || membership.DisplayName == "" {
+			return nil, errors.New("Tenant membership identity is required")
+		}
+		if _, exists := authenticator.membersByID[membership.TenantID]; exists {
+			return nil, errors.New("duplicate Tenant membership")
+		}
+		if _, exists := authenticator.membersBySlug[membership.TenantSlug]; exists {
+			return nil, errors.New("duplicate Tenant membership")
+		}
+		membership.Permissions = clonePermissions(membership.Permissions)
+		authenticator.membersByID[membership.TenantID] = membership
+		authenticator.membersBySlug[membership.TenantSlug] = membership
+	}
+	if _, exists := authenticator.membersByID[config.DefaultTenantID]; !exists {
+		return nil, errors.New("default Tenant must be an authorized membership")
+	}
+	return authenticator, nil
+}
+
+func (a *SessionAuthenticator) Authenticate(*http.Request) (Identity, error) {
+	selected, ok := a.config.SelectionStore.TenantSelection(a.config.SessionKey)
+	if _, authorized := a.membersByID[selected]; !ok || !authorized {
+		selected = a.config.DefaultTenantID
+		if err := a.config.SelectionStore.SaveTenantSelection(a.config.SessionKey, selected); err != nil {
+			return Identity{}, err
+		}
+	}
+	return a.identity(a.membersByID[selected]), nil
+}
+
+func (a *SessionAuthenticator) SelectTenant(_ *http.Request, tenantSlug string) (Identity, error) {
+	membership, ok := a.membersBySlug[tenantSlug]
+	if !ok {
+		return Identity{}, service.ErrPermissionDenied
+	}
+	if err := a.config.SelectionStore.SaveTenantSelection(a.config.SessionKey, membership.TenantID); err != nil {
+		return Identity{}, err
+	}
+	return a.identity(membership), nil
+}
+
+func (a *SessionAuthenticator) identity(selected TenantMembership) Identity {
+	memberships := make([]TenantMembership, 0, len(a.membersByID))
+	for _, membership := range a.membersByID {
+		membership.Permissions = nil
+		memberships = append(memberships, membership)
+	}
+	sort.Slice(memberships, func(i, j int) bool {
+		if memberships[i].DisplayName == memberships[j].DisplayName {
+			return memberships[i].TenantSlug < memberships[j].TenantSlug
+		}
+		return memberships[i].DisplayName < memberships[j].DisplayName
+	})
+	return Identity{
+		Auth: service.AuthenticatedContext{
+			PrincipalID: a.config.PrincipalID, TenantID: selected.TenantID, TenantSlug: selected.TenantSlug,
+			AuthenticationMethod: a.config.AuthenticationMethod, Permissions: clonePermissions(selected.Permissions),
+		},
+		TenantDisplayName: selected.DisplayName,
+		CSRFToken:         a.config.CSRFToken,
+		AuthorizedTenants: memberships,
+	}
+}
+
+func clonePermissions(source map[string]bool) map[string]bool {
+	cloned := make(map[string]bool, len(source))
+	for permission, allowed := range source {
+		cloned[permission] = allowed
+	}
+	return cloned
 }
 
 type Authenticator interface {
@@ -40,7 +147,11 @@ func (a StaticAuthenticator) Authenticate(*http.Request) (Identity, error) {
 	if a.Identity.Auth.PrincipalID == "" || a.Identity.Auth.TenantID == "" || a.Identity.Auth.TenantSlug == "" || a.Identity.Auth.AuthenticationMethod == "" {
 		return Identity{}, service.ErrUnauthenticated
 	}
-	return a.Identity, nil
+	identity := a.Identity
+	if len(identity.AuthorizedTenants) == 0 {
+		identity.AuthorizedTenants = []TenantMembership{{TenantID: identity.Auth.TenantID, TenantSlug: identity.Auth.TenantSlug, DisplayName: identity.TenantDisplayName}}
+	}
+	return identity, nil
 }
 
 type ControlPlane interface {
@@ -77,6 +188,10 @@ type server struct {
 	publishTimeout time.Duration
 }
 
+type tenantSelector interface {
+	SelectTenant(*http.Request, string) (Identity, error)
+}
+
 func New(config Config) http.Handler {
 	timeout := config.PublishTimeout
 	if timeout == 0 {
@@ -110,6 +225,8 @@ func (s *server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 	switch {
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/session":
 		s.session(response, requestID, identity)
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/session/tenant":
+		s.selectTenant(response, request, requestID)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/overview":
 		s.overview(response, request, requestID, identity)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/workers":
@@ -772,6 +889,32 @@ func uintString(value uint64) string {
 }
 
 func (s *server) session(response http.ResponseWriter, requestID string, identity Identity) {
+	writeJSON(response, http.StatusOK, sessionResponse(requestID, identity, ""))
+}
+
+func (s *server) selectTenant(response http.ResponseWriter, request *http.Request, requestID string) {
+	var input struct {
+		TenantSlug string `json:"tenantSlug"`
+	}
+	if err := decodeJSON(response, request, &input); err != nil || strings.TrimSpace(input.TenantSlug) == "" {
+		writeAPIError(response, http.StatusBadRequest, "validation_failed", "tenantSlug is required and must be the only declared field", requestID)
+		return
+	}
+	selector, ok := s.authenticator.(tenantSelector)
+	if !ok {
+		writeError(response, requestID, service.ErrPermissionDenied)
+		return
+	}
+	identity, err := selector.SelectTenant(request, input.TenantSlug)
+	if err != nil {
+		writeError(response, requestID, err)
+		return
+	}
+	identity.Auth.RequestID = requestID
+	writeJSON(response, http.StatusOK, sessionResponse(requestID, identity, "/"))
+}
+
+func sessionResponse(requestID string, identity Identity, redirect string) map[string]any {
 	permissions := make([]string, 0, len(identity.Auth.Permissions))
 	for permission, allowed := range identity.Auth.Permissions {
 		if allowed {
@@ -779,17 +922,28 @@ func (s *server) session(response http.ResponseWriter, requestID string, identit
 		}
 	}
 	sort.Strings(permissions)
-	writeJSON(response, http.StatusOK, map[string]any{
+	authorizedTenants := make([]map[string]string, 0, len(identity.AuthorizedTenants))
+	for _, membership := range identity.AuthorizedTenants {
+		authorizedTenants = append(authorizedTenants, map[string]string{
+			"slug": membership.TenantSlug, "displayName": membership.DisplayName, "stableIdentifier": membership.TenantID,
+		})
+	}
+	result := map[string]any{
 		"requestId": requestID,
 		"session": map[string]any{
 			"principalId": identity.Auth.PrincipalID,
 			"tenant": map[string]string{
 				"id": identity.Auth.TenantID, "slug": identity.Auth.TenantSlug, "displayName": identity.TenantDisplayName,
 			},
-			"permissions": permissions,
-			"csrfToken":   identity.CSRFToken,
+			"permissions":       permissions,
+			"csrfToken":         identity.CSRFToken,
+			"authorizedTenants": authorizedTenants,
 		},
-	})
+	}
+	if redirect != "" {
+		result["redirect"] = redirect
+	}
+	return result
 }
 
 func (s *server) createWorker(response http.ResponseWriter, request *http.Request, requestID string, identity Identity) {

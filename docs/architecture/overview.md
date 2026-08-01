@@ -97,6 +97,8 @@ projection = waiting-for-user
 
 Tenant isolation 由 control plane 的认证、授权、命名、store、quota 和 Audit 共同执行。共享基础设施不能被描述成 Kubernetes 或 Temporal 原生提供的硬多租户隔离。
 
+Console 始终在 authenticated session 的当前 Tenant 下工作。Tenant selector 只能切换到 auth layer 授权的 membership；服务端更新 session context 后，所有 Worker、Version、Workflow、Run 与 action 路由自动使用新的 Tenant。客户端不能通过 URL 或 request body 指定任意 Tenant。
+
 完整术语约束见 [org glossary](glossary.md)。
 
 ## 外部副作用

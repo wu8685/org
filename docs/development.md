@@ -62,12 +62,21 @@ make temporal-dev
 | `ORG_CONSOLE_TENANT_SLUG` | `local` | 服务端配置的本地 Tenant slug |
 | `ORG_CONSOLE_TENANT_NAME` | `Local Development` | Tenant display name |
 | `ORG_CONSOLE_PRINCIPAL_ID` | `local-developer` | 本地认证 principal |
+| `ORG_CONSOLE_TENANTS` | 未设置 | 可选的 loopback local-dev authorized Tenant membership JSON array；首项是默认 Tenant |
 
 Production 环境提供自己的 Kubernetes context、kubeconfig、Temporal endpoint、credential environment 和 registry allowlist。
 
 ## 启动 Console
 
-内置 executable 有意设计为仅 loopback 可访问的开发入口。Tenant identity 和 permission 来自服务端配置；request header 不能选择 Tenant。Production deployment 必须将 `console.Authenticator` 边界接入真实的 session 和 membership system。
+内置 executable 有意设计为仅 loopback 可访问的开发入口。Tenant identity、authorized Tenant membership 和 permission 都来自 server-side 配置；资源 request 的 header、query、path 或 body 不能指定 Tenant。Production deployment 必须将 `console.Authenticator` 边界接入真实的 session 和 membership system。
+
+本地双 Tenant 验收可在启动 Console 前设置：
+
+```sh
+ORG_CONSOLE_TENANTS='[{"id":"tenant-local","slug":"local","displayName":"Local Development"},{"id":"tenant-demo","slug":"demo","displayName":"Demo Team"}]' make console-dev
+```
+
+顶部 Tenant selector 只列出该 server-side catalog。选择结果按本地 session key 写入 FileStore，刷新页面和重启 Console 后仍保留；若某 membership 被移除，下一次认证安全回到首个默认 Tenant。这个配置只用于 loopback 开发，不是 production membership source。
 
 ```sh
 ORG_REGISTRY_ALLOWLIST=org.local,ghcr.io make console-dev

@@ -1,10 +1,18 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"strings"
 )
+
+type ConsoleTenant struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"displayName"`
+}
 
 type Config struct {
 	StateFile               string
@@ -22,6 +30,7 @@ type Config struct {
 	ConsoleTenantSlug       string
 	ConsoleTenantName       string
 	ConsolePrincipalID      string
+	ConsoleTenants          []ConsoleTenant
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -46,6 +55,16 @@ func Load(getenv func(string) string) (Config, error) {
 	set(&cfg.ConsoleTenantSlug, getenv("ORG_CONSOLE_TENANT_SLUG"))
 	set(&cfg.ConsoleTenantName, getenv("ORG_CONSOLE_TENANT_NAME"))
 	set(&cfg.ConsolePrincipalID, getenv("ORG_CONSOLE_PRINCIPAL_ID"))
+	if value := strings.TrimSpace(getenv("ORG_CONSOLE_TENANTS")); value != "" {
+		tenants, err := decodeConsoleTenants(value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ConsoleTenants = tenants
+		cfg.ConsoleTenantID, cfg.ConsoleTenantSlug, cfg.ConsoleTenantName = tenants[0].ID, tenants[0].Slug, tenants[0].DisplayName
+	} else {
+		cfg.ConsoleTenants = []ConsoleTenant{{ID: cfg.ConsoleTenantID, Slug: cfg.ConsoleTenantSlug, DisplayName: cfg.ConsoleTenantName}}
+	}
 	if value := strings.TrimSpace(getenv("ORG_REGISTRY_ALLOWLIST")); value != "" {
 		cfg.RegistryAllowlist = splitList(value)
 	}
@@ -59,6 +78,33 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("at least one image registry must be allowlisted")
 	}
 	return cfg, nil
+}
+
+func decodeConsoleTenants(value string) ([]ConsoleTenant, error) {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var tenants []ConsoleTenant
+	if err := decoder.Decode(&tenants); err != nil {
+		return nil, errors.New("ORG_CONSOLE_TENANTS must be a JSON array with only id, slug, and displayName")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("ORG_CONSOLE_TENANTS must contain one JSON value")
+	}
+	if len(tenants) == 0 {
+		return nil, errors.New("ORG_CONSOLE_TENANTS must contain at least one authorized Tenant")
+	}
+	ids, slugs := map[string]bool{}, map[string]bool{}
+	for index := range tenants {
+		tenants[index].ID = strings.TrimSpace(tenants[index].ID)
+		tenants[index].Slug = strings.TrimSpace(tenants[index].Slug)
+		tenants[index].DisplayName = strings.TrimSpace(tenants[index].DisplayName)
+		tenant := tenants[index]
+		if tenant.ID == "" || tenant.Slug == "" || tenant.DisplayName == "" || ids[tenant.ID] || slugs[tenant.Slug] {
+			return nil, errors.New("ORG_CONSOLE_TENANTS identities must be non-empty and unique")
+		}
+		ids[tenant.ID], slugs[tenant.Slug] = true, true
+	}
+	return tenants, nil
 }
 
 func set(target *string, value string) {

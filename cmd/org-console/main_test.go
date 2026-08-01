@@ -25,3 +25,24 @@ func TestDevelopmentTenantBootstrapAndIdentityAreServerConfigured(t *testing.T) 
 		t.Fatalf("identity=%#v", identity)
 	}
 }
+
+func TestDevelopmentTenantCatalogBootstrapsEveryAuthorizedTenant(t *testing.T) {
+	cfg := config.Config{
+		ConsoleTenantID: "tenant-a", ConsoleTenantSlug: "alpha", ConsoleTenantName: "Alpha", ConsolePrincipalID: "developer",
+		ConsoleTenants: []config.ConsoleTenant{{ID: "tenant-a", Slug: "alpha", DisplayName: "Alpha"}, {ID: "tenant-b", Slug: "beta", DisplayName: "Beta"}},
+	}
+	store := service.NewMemoryStore()
+	if err := ensureDevelopmentTenants(store, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.Tenant("tenant-a"); !ok {
+		t.Fatal("default Tenant was not created")
+	}
+	if tenant, ok := store.Tenant("tenant-b"); !ok || tenant.Slug != "beta" {
+		t.Fatalf("second Tenant=%#v exists=%v", tenant, ok)
+	}
+	memberships := developmentMemberships(cfg)
+	if len(memberships) != 2 || memberships[1].TenantID != "tenant-b" || !memberships[1].Permissions[service.PermissionRunStart] {
+		t.Fatalf("memberships=%#v", memberships)
+	}
+}
