@@ -1,8 +1,6 @@
 package console
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,15 +14,13 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
 	published := make(chan domain.WorkerVersionRequest, 1)
 	backend := &stubControlPlane{published: published, version: consoleVersion(time.Now().UTC())}
 	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: backend})
-	manifest, _ := json.Marshal(backend.version.Metadata)
 	body := `{
       "version":"v1",
       "description":"First release",
       "image":"registry.example.com/hello@sha256:` + strings.Repeat("a", 64) + `",
       "versionConfig":{"region":"local","provider":{"secretRef":"provider-token"}},
       "runtime":{"cpu":"100m","memory":"128Mi","environment":[]},
-      "source":{"repository":"https://example.com/repo","branch":"main","commit":"cccccccccccc","ciReference":"ci-1"},
-      "contractArtifact":{"manifestDigest":"sha256:` + strings.Repeat("b", 64) + `","manifest":` + string(manifest) + `}
+      "source":{"repository":"https://example.com/repo","branch":"main","commit":"cccccccccccc","ciReference":"ci-1"}
     }`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/workers/hello-worker/versions", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -36,7 +32,7 @@ func TestPublishWorkerVersionReturns202AndPollableOperation(t *testing.T) {
 	}
 	select {
 	case got := <-published:
-		if got.WorkerName != "hello-worker" || got.Version != "v1" || got.Description != "First release" || got.ManifestDigest == "" || !bytes.Contains(got.VersionConfig, []byte(`"region":"local"`)) || got.Metadata.Workflows[0].Name != "HelloWorkflow" {
+		if got.WorkerName != "hello-worker" || got.Version != "v1" || got.Description != "First release" || got.ManifestDigest != "" || len(got.Metadata.Workflows) != 0 || !strings.Contains(string(got.VersionConfig), `"region":"local"`) {
 			t.Fatalf("publish request = %#v", got)
 		}
 	case <-time.After(time.Second):
@@ -63,6 +59,8 @@ func TestPublishRejectsEditableContractAliasesAndTenantFields(t *testing.T) {
 	for _, body := range []string{
 		`{"version":"v1","description":"x","metadata":{}}`,
 		`{"version":"v1","description":"x","projection":{}}`,
+		`{"version":"v1","description":"x","contractArtifact":{}}`,
+		`{"version":"v1","description":"x","manifestDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
 		`{"version":"v1","description":"x","tenantId":"tenant-b"}`,
 		`{"version":"v1","description":"x","scope":"legacy"}`,
 	} {

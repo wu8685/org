@@ -59,8 +59,7 @@
       <label>Source branch<input name="branch" required value="main"></label>
       <label>Source commit<input name="commit" required pattern="[0-9a-fA-F]{7,64}"></label>
       <label>CI reference<input name="ciReference" required></label>
-      <label>Org SDK generated manifest<input name="manifest" type="file" accept="application/json" required></label>
-      <section class="readonly-contract" data-contract-readonly aria-label="只读 contract 摘要"><p>选择 generated manifest 后在此显示摘要。该内容不可编辑。</p></section>
+      <section class="readonly-contract" data-contract-readonly aria-label="SDK registration 状态"><p>发布后等待候选 Worker 通过 Org SDK 自动注册 contract。合同仅可读取，不从 Console 上传或编辑。</p></section>
       <div class="form-actions"><button class="btn btn-secondary" type="button" data-dialog-close>取消</button><button class="btn btn-primary" type="submit">开始发布</button></div>
     </form>
   </dialog>

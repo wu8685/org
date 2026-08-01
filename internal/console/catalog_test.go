@@ -77,7 +77,7 @@ func TestWorkerVersionDetailExposesReadOnlyContractAndProbeVerification(t *testi
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, want := range []string{`"contract":`, `"contractVerification":`, `"status":"verified"`, `"manifestDigest":"sha256:`, `"revision":3`} {
+	for _, want := range []string{`"contract":`, `"contractVerification":`, `"registration":{"registeredAt":`, `"status":"accepted"`, `"probe":{"status":"verified"`, `"manifestDigest":"sha256:`, `"revision":3`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("version detail missing %s: %s", want, body)
 		}
@@ -168,6 +168,6 @@ func consoleVersion(now time.Time) domain.WorkerVersion {
 		Image: "registry.example.com/hello@sha256:" + strings.Repeat("a", 64), ManifestDigest: "sha256:" + strings.Repeat("b", 64), Metadata: metadata,
 		Runtime: domain.RuntimeSpec{CPU: "100m", Memory: "128Mi", ServiceAccount: "secret-kube-service-account"}, Source: domain.SourceProvenance{Repository: "https://example.com/repo", Commit: strings.Repeat("c", 12), CIReference: "ci-1"},
 		TaskQueue: "secret-task-queue", WorkerDeployment: "secret-worker-deployment", KubernetesDeployment: "secret-kube-deployment",
-		State: domain.WorkerVersionReady, Health: domain.WorkerVersionHealth{KubernetesReady: true, WorkerPolling: true}, Current: true, Actor: "user-a", CreatedAt: now, UpdatedAt: now,
+		State: domain.WorkerVersionReady, RegistrationStatus: domain.BootstrapRegistrationAccepted, RegisteredAt: &now, Health: domain.WorkerVersionHealth{KubernetesReady: true, WorkerPolling: true}, Current: true, Actor: "user-a", CreatedAt: now, UpdatedAt: now,
 	}
 }

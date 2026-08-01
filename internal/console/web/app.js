@@ -178,7 +178,7 @@
         ["Worker", workerName], ["Version", mono(version.version)], ["Description", version.description], ["Revision", version.revision], ["Image", mono(version.image)], ["State", status(version.state)],
       ])]),
       card([el("h2", {text: "Contract verification"}), definition([
-        ["Status", status(version.contractVerification.status)], ["Manifest digest", mono(version.contractVerification.manifestDigest)], ["SDK", mono(version.contractVerification.sdkModuleVersion)], ["Runtime protocol", mono(version.contractVerification.runtimeProtocolVersion)],
+        ["SDK registration", status(version.registration?.status || "awaiting-registration")], ["Pinned probe", status(version.probe?.status || "pending")], ["Manifest digest", mono(version.contractVerification.manifestDigest || "等待 Worker 注册")], ["SDK", mono(version.contractVerification.sdkModuleVersion || "—")], ["Runtime protocol", mono(version.contractVerification.runtimeProtocolVersion || "—")],
       ])]),
     ]));
     content.append(section("Runtime config", card([definition([["CPU", version.runtime.cpu], ["Memory", version.runtime.memory]]), el("pre", {class: "contract-view", text: JSON.stringify(version.versionConfig || {}, null, 2)})])));
@@ -305,27 +305,13 @@
   const publishForm = document.querySelector("[data-publish-form]");
   let publishWorker = "";
   function openPublish(workerName) { publishWorker = workerName; publishDialog.showModal(); publishForm.elements.version.focus(); }
-  publishForm.elements.manifest.addEventListener("change", async event => {
-    const file = event.target.files[0]; if (!file) return;
-    try {
-      const manifest = JSON.parse(await file.text());
-      document.querySelector("[data-contract-readonly]").textContent = `${manifest.workflows?.length || 0} workflows · ${manifest.nodeTemplates?.length || 0} top-level node templates`;
-    } catch { showNotice("Generated manifest 不是有效 JSON。", true); }
-  });
   publishForm.addEventListener("submit", async event => {
     event.preventDefault();
-    const file = publishForm.elements.manifest.files[0];
-    if (!file) return;
     try {
-      const bytes = await file.arrayBuffer();
-      const manifest = JSON.parse(new TextDecoder().decode(bytes));
-      const canonicalManifest = new TextEncoder().encode(JSON.stringify(manifest));
-      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", canonicalManifest))].map(byte => byte.toString(16).padStart(2, "0")).join("");
       const bodyValue = {
         version: publishForm.elements.version.value, description: publishForm.elements.description.value, image: publishForm.elements.image.value,
         versionConfig: JSON.parse(publishForm.elements.versionConfig.value), runtime: {cpu: publishForm.elements.cpu.value, memory: publishForm.elements.memory.value},
         source: {repository: publishForm.elements.repository.value, branch: publishForm.elements.branch.value, commit: publishForm.elements.commit.value, ciReference: publishForm.elements.ciReference.value},
-        contractArtifact: {manifestDigest: `sha256:${digest}`, manifest},
       };
       const result = await api(`/api/v1/workers/${encodeURIComponent(publishWorker)}/versions`, {method: "POST", body: JSON.stringify(bodyValue)});
       publishDialog.close(); showNotice(`发布已受理：${result.operation.id}`, true); pollPublish(result.operation.statusUrl);

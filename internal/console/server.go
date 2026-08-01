@@ -164,24 +164,18 @@ type publishOperation struct {
 }
 
 type publishVersionInput struct {
-	Version          string                  `json:"version"`
-	Description      string                  `json:"description"`
-	Image            string                  `json:"image"`
-	VersionConfig    json.RawMessage         `json:"versionConfig,omitempty"`
-	Runtime          publishRuntime          `json:"runtime"`
-	Source           domain.SourceProvenance `json:"source"`
-	ContractArtifact contractArtifact        `json:"contractArtifact"`
+	Version       string                  `json:"version"`
+	Description   string                  `json:"description"`
+	Image         string                  `json:"image"`
+	VersionConfig json.RawMessage         `json:"versionConfig,omitempty"`
+	Runtime       publishRuntime          `json:"runtime"`
+	Source        domain.SourceProvenance `json:"source"`
 }
 
 type publishRuntime struct {
 	CPU         string                `json:"cpu"`
 	Memory      string                `json:"memory"`
 	Environment []domain.EnvReference `json:"environment,omitempty"`
-}
-
-type contractArtifact struct {
-	ManifestDigest string                `json:"manifestDigest"`
-	Manifest       domain.WorkerMetadata `json:"manifest"`
 }
 
 func (s *server) publishVersion(response http.ResponseWriter, request *http.Request, requestID string, identity Identity, workerName string) {
@@ -192,8 +186,8 @@ func (s *server) publishVersion(response http.ResponseWriter, request *http.Requ
 	}
 	command := domain.WorkerVersionRequest{
 		WorkerName: workerName, Version: input.Version, Description: input.Description, Image: input.Image,
-		VersionConfig: input.VersionConfig, ManifestDigest: input.ContractArtifact.ManifestDigest, Metadata: input.ContractArtifact.Manifest,
-		Runtime: domain.RuntimeSpec{CPU: input.Runtime.CPU, Memory: input.Runtime.Memory, Environment: input.Runtime.Environment}, Source: input.Source,
+		VersionConfig: input.VersionConfig,
+		Runtime:       domain.RuntimeSpec{CPU: input.Runtime.CPU, Memory: input.Runtime.Memory, Environment: input.Runtime.Environment}, Source: input.Source,
 	}
 	now := time.Now().UTC()
 	operation := publishOperation{ID: "pub-" + strings.TrimPrefix(newRequestID(), "req-"), TenantID: identity.Auth.TenantID, State: "running", CreatedAt: now, UpdatedAt: now}
@@ -653,8 +647,10 @@ func publicWorker(worker domain.Worker) map[string]any {
 
 func versionDetail(version domain.WorkerVersion) map[string]any {
 	verificationStatus := "pending"
+	probeStatus := "pending"
 	if version.State == domain.WorkerVersionReady && version.Health.KubernetesReady && version.Health.WorkerPolling {
 		verificationStatus = "verified"
+		probeStatus = "verified"
 	} else if version.State == domain.WorkerVersionFailed {
 		verificationStatus = "mismatch"
 	}
@@ -668,6 +664,13 @@ func versionDetail(version domain.WorkerVersion) map[string]any {
 		"health": version.Health, "current": version.Current, "actor": version.Actor, "createdAt": version.CreatedAt, "updatedAt": version.UpdatedAt, "failure": version.Failure,
 		"versionConfig": version.VersionConfig,
 		"runtime":       map[string]any{"cpu": version.Runtime.CPU, "memory": version.Runtime.Memory, "environment": environment},
+		"registration":  map[string]any{"status": version.RegistrationStatus, "registeredAt": version.RegisteredAt},
+		"probe": map[string]any{"status": probeStatus, "verifiedAt": func() any {
+			if probeStatus == "verified" {
+				return version.UpdatedAt
+			}
+			return nil
+		}()},
 		"contractVerification": map[string]any{
 			"status": verificationStatus, "manifestDigest": version.ManifestDigest,
 			"sdkModuleVersion": version.Metadata.SDK.ModuleVersion, "runtimeProtocolVersion": version.Metadata.SDK.RuntimeProtocolVersion,

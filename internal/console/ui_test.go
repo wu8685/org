@@ -45,13 +45,13 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 	body := response.Body.String()
 	for _, want := range []string{
 		`data-dag-canvas`, `data-dag-list`, `aria-live="polite"`, `data-action-dialog`,
-		`type="file"`, `data-contract-readonly`, `data-schema-fields`, `app.css`, `app.js`,
+		`data-contract-readonly`, `data-schema-fields`, `app.css`, `app.js`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("shell missing %q: %s", want, body)
 		}
 	}
-	for _, forbidden := range []string{"dag-branch-a", "approval-node", "finish-node", "contract-textarea", "routine-modal"} {
+	for _, forbidden := range []string{"dag-branch-a", "approval-node", "finish-node", "contract-textarea", "routine-modal", `type="file"`, `name="manifest"`} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("shell retained fixed/reference-only behavior %q", forbidden)
 		}
