@@ -53,8 +53,8 @@ func (c *Client) ApplyBootstrap(ctx context.Context, d domain.WorkerVersion, dep
 }
 
 func RenderBootstrapManifest(d domain.WorkerVersion, cfg Config, deployment service.BootstrapDeployment) (string, error) {
-	if strings.TrimSpace(deployment.Endpoint) == "" || strings.TrimSpace(deployment.Credential) == "" || deployment.ExpiresAt.IsZero() {
-		return "", errors.New("bootstrap endpoint, credential, and expiry are required")
+	if strings.TrimSpace(deployment.Endpoint) == "" || strings.TrimSpace(deployment.Credential) == "" || strings.TrimSpace(deployment.Generation) == "" || deployment.ExpiresAt.IsZero() {
+		return "", errors.New("bootstrap endpoint, credential, generation, and expiry are required")
 	}
 	manifest, err := RenderManifest(d, cfg)
 	if err != nil {
@@ -63,6 +63,8 @@ func RenderBootstrapManifest(d domain.WorkerVersion, cfg Config, deployment serv
 	secretName := bootstrapSecretName(d)
 	secret := fmt.Sprintf("apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app.kubernetes.io/managed-by: org\n    org.wu8685.dev/tenant-hash: %s\n    org.wu8685.dev/worker: %s\n    org.wu8685.dev/version: %s\ntype: Opaque\nstringData:\n  credential: %s\n---\n", secretName, cfg.Namespace, d.TenantHash, d.WorkerName, d.VersionHash, strconv.Quote(deployment.Credential))
 	manifest = secret + manifest
+	podLabelBoundary := fmt.Sprintf("        org.wu8685.dev/version: %s\n    spec:", d.VersionHash)
+	manifest = strings.Replace(manifest, podLabelBoundary, fmt.Sprintf("        org.wu8685.dev/version: %s\n        org.wu8685.dev/bootstrap-generation: %s\n    spec:", d.VersionHash, deployment.Generation), 1)
 	manifest = strings.Replace(manifest, "        volumeMounts:\n        - {name: tmp, mountPath: /tmp}", "        volumeMounts:\n        - {name: bootstrap, mountPath: /var/run/org-bootstrap, readOnly: true}\n        - {name: workload-identity, mountPath: /var/run/org-workload, readOnly: true}\n        - {name: tmp, mountPath: /tmp}", 1)
 	manifest = strings.Replace(manifest, "        env:\n        - {name: TEMPORAL_ADDRESS", fmt.Sprintf("        env:\n        - {name: ORG_BOOTSTRAP_ENDPOINT, value: %s}\n        - {name: ORG_BOOTSTRAP_TOKEN_FILE, value: /var/run/org-bootstrap/credential}\n        - {name: ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE, value: /var/run/org-workload/token}\n        - name: ORG_BOOTSTRAP_POD_UID\n          valueFrom:\n            fieldRef:\n              fieldPath: metadata.uid\n        - {name: ORG_BOOTSTRAP_EXPIRES_AT, value: %s}\n        - {name: TEMPORAL_ADDRESS", strconv.Quote(deployment.Endpoint), strconv.Quote(deployment.ExpiresAt.UTC().Format(time.RFC3339))), 1)
 	manifest = strings.Replace(manifest, "      volumes:\n      - name: tmp", fmt.Sprintf("      volumes:\n      - name: bootstrap\n        secret:\n          secretName: %s\n          defaultMode: 0440\n      - name: workload-identity\n        projected:\n          defaultMode: 0440\n          sources:\n          - serviceAccountToken:\n              audience: org-worker-bootstrap\n              expirationSeconds: 600\n              path: token\n      - name: tmp", secretName), 1)

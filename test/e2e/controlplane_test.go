@@ -139,7 +139,7 @@ func verifyBootstrapRetryAndRejections(t *testing.T, run *acceptanceRun, version
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong := domain.BootstrapBinding{ExpectedImage: "org.local/hello-worker@sha256:" + strings.Repeat("f", 64), ExpectedServiceAccount: version.KubernetesServiceAccount}
+	wrong := domain.BootstrapBinding{TenantHash: evidence.TenantHash, WorkerName: evidence.WorkerName, VersionHash: evidence.VersionHash, DeploymentGeneration: evidence.DeploymentGeneration, ExpectedDeployment: evidence.OwnerDeployment, ExpectedImage: "org.local/hello-worker@sha256:" + strings.Repeat("f", 64), ExpectedServiceAccount: version.KubernetesServiceAccount}
 	if err := (service.StrictBootstrapWorkloadVerifier{}).VerifyBootstrapWorkload(run.ctx, wrong, evidence); err == nil {
 		t.Fatal("mismatched expected image was accepted")
 	}

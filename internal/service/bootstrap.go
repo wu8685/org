@@ -27,12 +27,17 @@ type BootstrapMaterial struct {
 }
 
 type BootstrapWorkloadEvidence struct {
-	PodUID              string `json:"podUid"`
-	ObservedImage       string `json:"observedImage"`
-	RuntimeImageID      string `json:"runtimeImageId,omitempty"`
-	RuntimeLinkVerified bool   `json:"-"`
-	ServiceAccount      string `json:"serviceAccount"`
-	AudienceVerified    bool   `json:"-"`
+	PodUID               string `json:"podUid"`
+	ObservedImage        string `json:"observedImage"`
+	RuntimeImageID       string `json:"runtimeImageId,omitempty"`
+	RuntimeLinkVerified  bool   `json:"-"`
+	ServiceAccount       string `json:"serviceAccount"`
+	AudienceVerified     bool   `json:"-"`
+	TenantHash           string `json:"-"`
+	WorkerName           string `json:"-"`
+	VersionHash          string `json:"-"`
+	DeploymentGeneration string `json:"-"`
+	OwnerDeployment      string `json:"-"`
 }
 
 type BootstrapWorkloadVerifier interface {
@@ -50,6 +55,9 @@ type StrictBootstrapWorkloadVerifier struct{}
 func (StrictBootstrapWorkloadVerifier) VerifyBootstrapWorkload(_ context.Context, binding domain.BootstrapBinding, evidence BootstrapWorkloadEvidence) error {
 	if !evidence.AudienceVerified || strings.TrimSpace(evidence.PodUID) == "" || evidence.ServiceAccount != binding.ExpectedServiceAccount {
 		return errors.New("bound Kubernetes workload identity is required")
+	}
+	if evidence.TenantHash == "" || evidence.TenantHash != binding.TenantHash || evidence.WorkerName != binding.WorkerName || evidence.VersionHash == "" || evidence.VersionHash != binding.VersionHash || evidence.DeploymentGeneration == "" || evidence.DeploymentGeneration != binding.DeploymentGeneration || evidence.OwnerDeployment == "" || evidence.OwnerDeployment != binding.ExpectedDeployment {
+		return errors.New("candidate Pod labels, rollout generation, or Deployment owner do not match the bootstrap binding")
 	}
 	if evidence.ObservedImage != binding.ExpectedImage || (evidence.RuntimeImageID != "" && evidence.RuntimeImageID != binding.ExpectedImage && !evidence.RuntimeLinkVerified) {
 		return errors.New("runtime Pod imageID does not match the expected immutable image digest")
@@ -92,7 +100,7 @@ func NewBootstrapRegistry(store Store, cfg BootstrapRegistryConfig) *BootstrapRe
 }
 
 func (r *BootstrapRegistry) Issue(version domain.WorkerVersion, deploymentGeneration string) (BootstrapMaterial, error) {
-	if version.ID == "" || version.TenantID == "" || version.WorkerName == "" || version.Version == "" || deploymentGeneration == "" {
+	if version.ID == "" || version.TenantID == "" || version.TenantSlug == "" || version.TenantHash == "" || version.WorkerName == "" || version.Version == "" || version.VersionHash == "" || version.Image == "" || version.KubernetesServiceAccount == "" || version.KubernetesDeployment == "" || strings.TrimSpace(deploymentGeneration) == "" {
 		return BootstrapMaterial{}, errors.New("complete pending WorkerVersion binding is required")
 	}
 	if version.State != domain.WorkerVersionPending || version.ManifestDigest != "" || len(version.Metadata.Workflows) != 0 {
@@ -106,8 +114,8 @@ func (r *BootstrapRegistry) Issue(version domain.WorkerVersion, deploymentGenera
 	hash := sha256.Sum256([]byte(token))
 	expires := r.cfg.Now().Add(r.cfg.TTL)
 	credential := domain.BootstrapCredential{TokenHash: hex.EncodeToString(hash[:]), Binding: domain.BootstrapBinding{
-		TenantID: version.TenantID, TenantSlug: version.TenantSlug, WorkerName: version.WorkerName,
-		WorkerVersionID: version.ID, Version: version.Version, ExpectedImage: version.Image, ExpectedServiceAccount: version.KubernetesServiceAccount,
+		TenantID: version.TenantID, TenantSlug: version.TenantSlug, TenantHash: version.TenantHash, WorkerName: version.WorkerName,
+		WorkerVersionID: version.ID, Version: version.Version, VersionHash: version.VersionHash, ExpectedImage: version.Image, ExpectedServiceAccount: version.KubernetesServiceAccount, ExpectedDeployment: version.KubernetesDeployment,
 		DeploymentGeneration: deploymentGeneration, ExpiresAt: expires,
 	}}
 	if err := r.store.SaveBootstrapCredential(credential); err != nil {

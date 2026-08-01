@@ -71,6 +71,7 @@ type Cluster interface {
 type BootstrapDeployment struct {
 	Endpoint   string
 	Credential string
+	Generation string
 	ExpiresAt  time.Time
 }
 type BootstrapCluster interface {
@@ -381,13 +382,14 @@ func (c *ControlPlane) PublishVersion(ctx context.Context, auth AuthenticatedCon
 		if !ok || strings.TrimSpace(c.cfg.BootstrapEndpoint) == "" {
 			return c.failWorkerVersion(tenant.ID, d, errors.New("bootstrap-capable cluster and endpoint are required"))
 		}
-		material, issueErr := c.bootstrap.Issue(d, "generation-1")
+		generation := newID("generation")
+		material, issueErr := c.bootstrap.Issue(d, generation)
 		if issueErr != nil {
 			return c.failWorkerVersion(tenant.ID, d, issueErr)
 		}
 		c.mu.Unlock()
 		locked = false
-		applyErr = bootstrapCluster.ApplyBootstrap(ctx, d, BootstrapDeployment{Endpoint: c.cfg.BootstrapEndpoint, Credential: material.Token, ExpiresAt: material.ExpiresAt})
+		applyErr = bootstrapCluster.ApplyBootstrap(ctx, d, BootstrapDeployment{Endpoint: c.cfg.BootstrapEndpoint, Credential: material.Token, Generation: generation, ExpiresAt: material.ExpiresAt})
 	} else {
 		c.mu.Unlock()
 		locked = false

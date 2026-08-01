@@ -110,21 +110,74 @@ func TestBootstrapRegistrationRejectsExpiredOrWrongImageWithoutWritingContract(t
 	}
 }
 
+func TestBootstrapIssueRequiresCompleteCandidateWorkloadBinding(t *testing.T) {
+	for name, mutate := range map[string]func(*domain.WorkerVersion){
+		"tenant-hash":     func(version *domain.WorkerVersion) { version.TenantHash = "" },
+		"version-hash":    func(version *domain.WorkerVersion) { version.VersionHash = "" },
+		"deployment":      func(version *domain.WorkerVersion) { version.KubernetesDeployment = "" },
+		"service-account": func(version *domain.WorkerVersion) { version.KubernetesServiceAccount = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			version := bootstrapPendingVersion(t)
+			mutate(&version)
+			if _, err := NewBootstrapRegistry(NewMemoryStore(), BootstrapRegistryConfig{}).Issue(version, "generation-1"); err == nil {
+				t.Fatal("incomplete candidate workload binding was issued")
+			}
+		})
+	}
+}
+
 func TestStrictBootstrapVerifierRequiresAudienceAndExactImageIdentity(t *testing.T) {
 	verifier := StrictBootstrapWorkloadVerifier{}
-	binding := domain.BootstrapBinding{ExpectedImage: "registry.example.com/acme/worker@sha256:" + strings.Repeat("a", 64), ExpectedServiceAccount: "org-worker"}
-	if err := verifier.VerifyBootstrapWorkload(context.Background(), binding, BootstrapWorkloadEvidence{AudienceVerified: true, PodUID: "pod-1", ServiceAccount: "org-worker", ObservedImage: binding.ExpectedImage}); err != nil {
+	binding := domain.BootstrapBinding{TenantHash: "tenant-hash", WorkerName: "worker", VersionHash: "version-hash", DeploymentGeneration: "generation-1", ExpectedDeployment: "worker-deployment", ExpectedImage: "registry.example.com/acme/worker@sha256:" + strings.Repeat("a", 64), ExpectedServiceAccount: "org-worker"}
+	valid := BootstrapWorkloadEvidence{AudienceVerified: true, PodUID: "pod-1", ServiceAccount: "org-worker", ObservedImage: binding.ExpectedImage, TenantHash: binding.TenantHash, WorkerName: binding.WorkerName, VersionHash: binding.VersionHash, DeploymentGeneration: binding.DeploymentGeneration, OwnerDeployment: binding.ExpectedDeployment}
+	if err := verifier.VerifyBootstrapWorkload(context.Background(), binding, valid); err != nil {
 		t.Fatal(err)
 	}
 	for _, evidence := range []BootstrapWorkloadEvidence{
-		{PodUID: "pod-1", ServiceAccount: "org-worker", ObservedImage: binding.ExpectedImage},
-		{AudienceVerified: true, PodUID: "pod-1", ServiceAccount: "org-worker", ObservedImage: "registry.example.com/acme/worker@sha256:" + strings.Repeat("b", 64)},
-		{AudienceVerified: true, ServiceAccount: "org-worker", ObservedImage: binding.ExpectedImage},
-		{AudienceVerified: true, PodUID: "pod-1", ServiceAccount: "other", ObservedImage: binding.ExpectedImage},
+		func() BootstrapWorkloadEvidence { item := valid; item.AudienceVerified = false; return item }(),
+		func() BootstrapWorkloadEvidence {
+			item := valid
+			item.ObservedImage = "registry.example.com/acme/worker@sha256:" + strings.Repeat("b", 64)
+			return item
+		}(),
+		func() BootstrapWorkloadEvidence { item := valid; item.PodUID = ""; return item }(),
+		func() BootstrapWorkloadEvidence { item := valid; item.ServiceAccount = "other"; return item }(),
 	} {
 		if err := verifier.VerifyBootstrapWorkload(context.Background(), binding, evidence); err == nil {
 			t.Fatalf("unsafe evidence accepted: %#v", evidence)
 		}
+	}
+}
+
+func TestStrictBootstrapVerifierRequiresExactCandidateLabelsGenerationAndOwner(t *testing.T) {
+	verifier := StrictBootstrapWorkloadVerifier{}
+	binding := domain.BootstrapBinding{
+		TenantHash: "tenant-hash", WorkerName: "worker", VersionHash: "version-hash",
+		DeploymentGeneration: "generation-1", ExpectedDeployment: "org-worker-version", ExpectedImage: "registry.example.com/acme/worker@sha256:" + strings.Repeat("a", 64), ExpectedServiceAccount: "org-worker",
+	}
+	evidence := BootstrapWorkloadEvidence{
+		AudienceVerified: true, PodUID: "pod-1", ServiceAccount: binding.ExpectedServiceAccount, ObservedImage: binding.ExpectedImage,
+		TenantHash: binding.TenantHash, WorkerName: binding.WorkerName, VersionHash: binding.VersionHash,
+		DeploymentGeneration: binding.DeploymentGeneration, OwnerDeployment: binding.ExpectedDeployment,
+	}
+	if err := verifier.VerifyBootstrapWorkload(context.Background(), binding, evidence); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*BootstrapWorkloadEvidence){
+		"tenant":     func(item *BootstrapWorkloadEvidence) { item.TenantHash = "other" },
+		"worker":     func(item *BootstrapWorkloadEvidence) { item.WorkerName = "other" },
+		"version":    func(item *BootstrapWorkloadEvidence) { item.VersionHash = "other" },
+		"generation": func(item *BootstrapWorkloadEvidence) { item.DeploymentGeneration = "stale" },
+		"owner":      func(item *BootstrapWorkloadEvidence) { item.OwnerDeployment = "other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := evidence
+			mutate(&candidate)
+			if err := verifier.VerifyBootstrapWorkload(context.Background(), binding, candidate); err == nil {
+				t.Fatalf("mismatched %s identity was accepted: %#v", name, candidate)
+			}
+		})
 	}
 }
 
@@ -274,7 +327,7 @@ func (s *bootstrapAcceptanceFaultStore) CommitBootstrapAcceptance(tenantID strin
 
 func bootstrapPendingVersion(t *testing.T) domain.WorkerVersion {
 	t.Helper()
-	return domain.WorkerVersion{ID: "ver-1", TenantID: "tenant-1", TenantSlug: "acme", WorkerName: "payments-worker", Version: "v1", Image: "registry.example.com/acme/payments@sha256:" + strings.Repeat("a", 64), State: domain.WorkerVersionPending}
+	return domain.WorkerVersion{ID: "ver-1", TenantID: "tenant-1", TenantSlug: "acme", TenantHash: "tenant-hash", WorkerName: "payments-worker", Version: "v1", VersionHash: "version-hash", Image: "registry.example.com/acme/payments@sha256:" + strings.Repeat("a", 64), KubernetesDeployment: "org-acme-payments-version", KubernetesServiceAccount: "org-acme-payments", State: domain.WorkerVersionPending}
 }
 
 func bootstrapContract(t *testing.T, buildID string) domain.WorkerContractRegistration {

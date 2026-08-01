@@ -187,11 +187,14 @@ const (
 type BootstrapBinding struct {
 	TenantID               string    `json:"tenantId"`
 	TenantSlug             string    `json:"tenantSlug"`
+	TenantHash             string    `json:"tenantHash"`
 	WorkerName             string    `json:"workerName"`
 	WorkerVersionID        string    `json:"workerVersionId"`
 	Version                string    `json:"version"`
+	VersionHash            string    `json:"versionHash"`
 	ExpectedImage          string    `json:"expectedImage"`
 	ExpectedServiceAccount string    `json:"expectedServiceAccount"`
+	ExpectedDeployment     string    `json:"expectedDeployment"`
 	DeploymentGeneration   string    `json:"deploymentGeneration"`
 	ExpiresAt              time.Time `json:"expiresAt"`
 }

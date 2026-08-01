@@ -448,10 +448,12 @@ SDK tooling可以选择输出deterministic JSON artifact，但hosted startup、p
 
 ## 已批准的安全与运行默认
 
-1. bootstrap opaque token之外，强制使用audience=`org-worker-bootstrap`的Pod-bound projected ServiceAccount token + TokenReview；Worker ServiceAccount仍无Kubernetes API RBAC。
+1. bootstrap opaque token之外，强制使用audience=`org-worker-bootstrap`的Pod-bound projected ServiceAccount token + TokenReview；TokenReview中的`authentication.kubernetes.io/pod-uid`必须唯一且与请求header及live Pod UID相同。Worker ServiceAccount仍无Kubernetes API RBAC。
 2. MVP只接受platform-specific immutable image manifest digest；mutable tag、`tag@digest`与multi-arch index digest拒绝。
 3. credential TTL默认15分钟；Pod scheduled后的registration deadline默认10分钟；合法replacement Pod最多自动rotation一次。
 4. testkit/local sample允许显式disable bootstrap；platform hosted mode检测到bootstrap配置后fail-closed，不允许缺少字段时静默开始polling。
 5. contract/image/protocol/workload identity mismatch使WorkerVersion terminal failed；修复必须发布新version。dependency timeout只允许controller在deadline内有限重试。
 6. production internal endpoint强制TLS和内部service identity；kind使用开发CA，不允许明文传输bearer credential。
 7. successful registration保留token hash对应的exact-retry receipt 5分钟，随后删除credential reservation；durable registration record继续存在但不能用作一般credential。
+
+每次candidate rollout使用密码学随机、服务端生成的deployment generation，并同时写入credential binding与Pod template label。注册时control plane读取live Pod及其owner chain，要求Tenant hash、Worker、version hash、generation标签完全匹配binding，Pod controller owner为live ReplicaSet，且该ReplicaSet的controller owner是binding中的canonical Deployment；相同ServiceAccount的旧Pod或旧generation不能使用泄露的bootstrap token完成注册。

@@ -70,8 +70,12 @@ func TestAcceptedBootstrapRegistrationRunsPinnedProbeBeforePromotion(t *testing.
 		t.Fatal(err)
 	}
 	material := cluster.bootstrap
-	if material.Credential == "" {
-		t.Fatal("bootstrap credential was not injected")
+	if material.Credential == "" || !strings.HasPrefix(material.Generation, "generation-") || material.Generation == "generation-1" {
+		t.Fatalf("bootstrap credential/generation was not safely injected: %#v", material)
+	}
+	credentials := cp.store.BootstrapCredentials()
+	if len(credentials) != 1 || credentials[0].Binding.DeploymentGeneration != material.Generation || credentials[0].Binding.ExpectedDeployment != version.KubernetesDeployment || credentials[0].Binding.TenantHash != version.TenantHash || credentials[0].Binding.VersionHash != version.VersionHash {
+		t.Fatalf("bootstrap binding does not match candidate rollout: %#v", credentials)
 	}
 	contract := bootstrapContract(t, version.Version)
 	executor.probeResult = RuntimeIdentity{ManifestDigest: contract.ManifestDigest, SDKModuleVersion: orgsdk.SDKModuleVersion, RuntimeProtocolVersion: orgsdk.RuntimeProtocolVersion, WorkerBuildID: version.Version}

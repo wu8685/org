@@ -12,11 +12,11 @@ import (
 
 func TestBootstrapManifestInjectsCredentialAsReadonlyFileAndNoPublicIdentity(t *testing.T) {
 	d := testDeployment()
-	manifest, err := RenderBootstrapManifest(d, Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, service.BootstrapDeployment{Endpoint: "https://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "opaque-secret", ExpiresAt: time.Now().Add(time.Minute)})
+	manifest, err := RenderBootstrapManifest(d, Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, service.BootstrapDeployment{Endpoint: "https://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "opaque-secret", Generation: "generation-random", ExpiresAt: time.Now().Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"kind: Secret", "opaque-secret", "ORG_BOOTSTRAP_ENDPOINT", "/var/run/org-bootstrap/credential", "readOnly: true", "audience: org-worker-bootstrap", "ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE", "ORG_BOOTSTRAP_POD_UID", "fieldPath: metadata.uid", "fsGroup: 65532", "defaultMode: 0440"} {
+	for _, want := range []string{"kind: Secret", "opaque-secret", "ORG_BOOTSTRAP_ENDPOINT", "/var/run/org-bootstrap/credential", "readOnly: true", "audience: org-worker-bootstrap", "ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE", "ORG_BOOTSTRAP_POD_UID", "fieldPath: metadata.uid", "fsGroup: 65532", "defaultMode: 0440", "org.wu8685.dev/bootstrap-generation: generation-random"} {
 		if !strings.Contains(manifest, want) {
 			t.Fatalf("bootstrap manifest missing %q\n%s", want, manifest)
 		}
