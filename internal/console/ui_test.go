@@ -102,9 +102,9 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 		path  string
 		wants []string
 	}{
-		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", ".run-status-summary", "prefers-reduced-motion"}},
+		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", ".run-status-summary", ".run-failure-panel", "prefers-reduced-motion"}},
 		{"/assets/yaml-renderer.js", []string{"YAML display unavailable", "MAX_DEPTH", "MAX_OUTPUT", "Object.keys(value).sort()", "module.exports", "canonicalJSON", "YAML parse error", "custom tags, anchors, aliases, and merge keys are disabled"}},
-		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run", "lastRunsETag", "semanticStatus", "runStatusSummary", "Run status", "Waiting for user", "Cancelled"}},
+		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run", "lastRunsETag", "semanticStatus", "runStatusSummary", "runFailurePanel", "errorSummary", "Failure code", "Run failed", `role: "alert"`, "Waiting for user", "Cancelled"}},
 	}
 	for _, check := range checks {
 		response := httptest.NewRecorder()

@@ -638,6 +638,9 @@ func (s *server) listRuns(response http.ResponseWriter, request *http.Request, r
 		item["executionStatus"], item["projectionStatus"], item["semanticStatus"] = executionStatus, projectionStatus, semanticStatus
 		item["projectionRevision"], item["currentNodes"], item["currentNodeSummary"] = revision, currentNodes, strings.Join(labels, ", ")
 		item["blockReason"], item["semanticUpdatedAt"] = blockReason, updatedAt
+		if semanticStatus == string(domain.InvocationFailed) && view.Failure != nil {
+			item["errorSummary"] = runFailureSummary(view.Failure)
+		}
 		publicItems = append(publicItems, item)
 	}
 	encoded, err := json.Marshal(publicItems)
@@ -653,6 +656,16 @@ func (s *server) listRuns(response http.ResponseWriter, request *http.Request, r
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"requestId": requestID, "items": publicItems})
+}
+
+func runFailureSummary(failure *domain.RunFailure) map[string]any {
+	message := []rune(failure.Message)
+	if len(message) > 160 {
+		message = message[:160]
+	}
+	return map[string]any{
+		"code": failure.Code, "message": string(message), "nodeLabel": failure.NodeLabel, "occurredAt": failure.OccurredAt,
+	}
 }
 
 func runListSemanticSummary(invocation domain.Invocation, view service.InvocationView, viewErr error) (string, []map[string]string, string, time.Time, uint64) {
@@ -727,10 +740,19 @@ func (s *server) runDetail(response http.ResponseWriter, request *http.Request, 
 		revision = view.SemanticProjection.Revision
 	}
 	etag := `"projection-r` + uintString(revision) + `"`
+	if view.Failure != nil {
+		encoded, marshalErr := json.Marshal(view.Failure)
+		if marshalErr != nil {
+			writeError(response, requestID, marshalErr)
+			return
+		}
+		digest := sha256.Sum256(encoded)
+		etag = `"projection-r` + uintString(revision) + `-f` + hex.EncodeToString(digest[:8]) + `"`
+	}
 	if conditionalNotModified(response, request, etag) {
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"requestId": requestID,
 		"run": map[string]any{
 			"id": view.Invocation.ID, "workerName": view.Invocation.WorkerName, "workflow": view.Invocation.Workflow,
@@ -740,7 +762,11 @@ func (s *server) runDetail(response http.ResponseWriter, request *http.Request, 
 		"workerVersion": map[string]any{"version": view.WorkerVersion.Version, "description": view.WorkerVersion.Description, "revision": view.WorkerVersion.Revision},
 		"execution":     view.Execution, "semanticProjection": view.SemanticProjection,
 		"actionOperations": actionSummaries(actions), "temporalDiagnosticsUrl": view.TemporalDiagnosticsURL,
-	})
+	}
+	if view.Failure != nil {
+		payload["failure"] = view.Failure
+	}
+	writeJSON(response, http.StatusOK, payload)
 }
 
 func pathParts(path string) []string {

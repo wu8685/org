@@ -85,6 +85,10 @@ tr:last-child td { border-bottom: 0; }
 .status-pending, .status-skipped { color: var(--muted); background: #f1f1f1; }
 .run-status-summary { display: grid; justify-items: start; gap: 6px; min-width: 140px; }
 .run-block-reason { max-width: 32ch; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.run-error-summary { max-width: 38ch; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.run-failure-panel { margin-top: 20px; padding: 18px 20px; border: 1px solid var(--danger); border-left-width: 5px; border-radius: var(--radius-md); background: #fff5f5; }
+.run-failure-panel h2 { margin: 0 0 8px; color: var(--danger); }
+.run-failure-message { margin: 0 0 16px; font-weight: 620; white-space: pre-wrap; overflow-wrap: anywhere; }
 .notice { margin-bottom: 18px; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: var(--radius-sm); background: #fff8c5; }
 .empty { padding: 52px 24px; text-align: center; color: var(--muted); }
 .definition { display: grid; grid-template-columns: minmax(130px, .4fr) 1fr; gap: 10px 20px; margin: 0; }

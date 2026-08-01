@@ -23,7 +23,8 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := domain.WorkerVersion{ID: "ver-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Version: "v1", Description: "Initial release.", Revision: 1, Current: true}
-	i := domain.Invocation{ID: "inv-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Workflow: "ChargeOrder", Description: "Why this Run exists", IdempotencyKey: "checkout-42", IdempotencyPayloadDigest: "sha256:intent"}
+	failureTime := time.Date(2026, 8, 2, 7, 0, 0, 0, time.UTC)
+	i := domain.Invocation{ID: "inv-1", TenantID: tenant.ID, TenantSlug: tenant.Slug, WorkerName: "payments-worker", Workflow: "ChargeOrder", Description: "Why this Run exists", IdempotencyKey: "checkout-42", IdempotencyPayloadDigest: "sha256:intent", SafeFailure: &domain.RunFailure{Code: "invalid_route", Message: "Unsupported mode.", RuntimeNodeID: "route-aaaaaaaaaaaaaaaa", TemplateID: "route", NodeLabel: "Determine route", OccurredAt: failureTime}}
 	if err := store.SaveWorkerVersion(tenant.ID, d); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestFileStorePersistsDeploymentAndInvocationAcrossRestart(t *testing.T) {
 	if got := reopened.WorkerVersions(tenant.ID, "payments-worker"); len(got) != 1 || got[0].ID != d.ID || got[0].Description != "Corrected release." || got[0].Revision != 2 {
 		t.Fatalf("deployments = %#v", got)
 	}
-	if got, ok := reopened.Invocation(tenant.ID, "inv-1"); !ok || got.IdempotencyKey != i.IdempotencyKey || got.Description != i.Description || got.IdempotencyPayloadDigest != i.IdempotencyPayloadDigest {
+	if got, ok := reopened.Invocation(tenant.ID, "inv-1"); !ok || got.IdempotencyKey != i.IdempotencyKey || got.Description != i.Description || got.IdempotencyPayloadDigest != i.IdempotencyPayloadDigest || got.SafeFailure == nil || got.SafeFailure.Code != "invalid_route" || !got.SafeFailure.OccurredAt.Equal(failureTime) {
 		t.Fatalf("invocation = %#v, %v", got, ok)
 	}
 	if got, ok := reopened.ActionOperation(tenant.ID, i.ID, operation.RuntimeNodeID, operation.Action, operation.OperationID); !ok || got.State != domain.ActionDeliveryDelivered {

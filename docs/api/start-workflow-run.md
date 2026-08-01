@@ -49,3 +49,24 @@ Idempotency-Key: <unique-run-start-key>
 - 不提供 key 时，每次调用都创建独立 Run。
 
 Run list、detail 和 Tenant-scoped Audit 会显示规范化后的 description。description 不会传给 Temporal Workflow，也不会改变 SDK contract digest。
+
+## 读取安全的失败信息
+
+失败 Run 的 list item 会包含有界的 `errorSummary`，detail 会包含完整但仍受限的 `failure`：
+
+```json
+{
+  "failure": {
+    "code": "invalid_route",
+    "message": "Unsupported mode. Choose concise or detailed.",
+    "runtimeNodeId": "determine-route-...",
+    "templateId": "determine-route",
+    "nodeLabel": "Determine route",
+    "occurredAt": "2026-08-02T06:00:00Z"
+  }
+}
+```
+
+`code` 适合稳定的产品处理；`message` 适合直接向用户说明下一步。list 中的 message 最多显示 160 个 Unicode code points，detail 最多 300 个。成功和取消的 Run 不返回 failure。
+
+这些字段来自 Org SDK semantic projection，并由 control plane 再次校验后持久化。API 不会返回 raw stack、panic、Activity 原始 error、外部服务响应、Workflow input 或 Secret。需要底层排障信息时，只向有权限的人员使用 Run detail 中的 advanced diagnostics 链接。

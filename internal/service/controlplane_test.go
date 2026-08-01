@@ -908,6 +908,86 @@ func TestGetInvocationReturnsValidatedOrgSDKDynamicProjection(t *testing.T) {
 	}
 }
 
+func TestGetInvocationPersistsSafeFailureAndSurvivesProjectionQueryFailure(t *testing.T) {
+	definition := dynamicServiceDefinition()
+	nodeID := orgsdk.RuntimeNodeID(definition.Name, "", "route", "singleton")
+	occurredAt := time.Date(2026, 8, 2, 6, 0, 0, 0, time.UTC)
+	projection := orgsdk.Projection{
+		ContractVersion: orgsdk.ContractVersion, WorkflowName: "DynamicWorkflow", WorkerVersion: "v1", Revision: 4, Status: "failed",
+		Nodes:   []orgsdk.NodeProjection{{RuntimeNodeID: nodeID, TemplateID: "route", Label: "Choose route", Status: orgsdk.NodeStatusFailed}},
+		Failure: &orgsdk.Failure{Code: "invalid_route", Message: "Unsupported mode. Choose concise or detailed.", RuntimeNodeID: nodeID, TemplateID: "route", NodeLabel: "Choose route", OccurredAt: occurredAt},
+	}
+	projectionJSON, _ := json.Marshal(projection)
+	executor := &fakeExecutor{describeResult: ExecutionState{Status: "failed"}, queryResult: projectionJSON}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, &fakeCluster{}, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, dynamicServiceWorkerVersionRequest(t, definition)); err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "DynamicWorkflow", Input: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := cp.GetInvocation(context.Background(), auth, invocation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Failure == nil || view.Failure.Code != "invalid_route" || view.Failure.Message != "Unsupported mode. Choose concise or detailed." || view.Failure.NodeLabel != "Choose route" || !view.Failure.OccurredAt.Equal(occurredAt) {
+		t.Fatalf("failure=%#v", view.Failure)
+	}
+	stored, _ := cp.store.Invocation(auth.TenantID, invocation.ID)
+	if stored.SafeFailure == nil || stored.SafeFailure.Code != "invalid_route" {
+		t.Fatalf("durable invocation failure=%#v", stored.SafeFailure)
+	}
+	executor.queryErr = errors.New("projection query temporarily unavailable")
+	restartedView, err := cp.GetInvocation(context.Background(), auth, invocation.ID)
+	if err != nil || restartedView.Failure == nil || restartedView.Failure.Code != "invalid_route" || restartedView.SemanticProjection != nil {
+		t.Fatalf("durable fallback view=%#v err=%v", restartedView, err)
+	}
+}
+
+func TestGetInvocationRedactsUnsafeFailureAndNeverMarksCancellationFailed(t *testing.T) {
+	definition := dynamicServiceDefinition()
+	nodeID := orgsdk.RuntimeNodeID(definition.Name, "", "route", "singleton")
+	unsafe := orgsdk.Projection{
+		ContractVersion: orgsdk.ContractVersion, WorkflowName: "DynamicWorkflow", WorkerVersion: "v1", Revision: 4, Status: "failed",
+		Nodes:   []orgsdk.NodeProjection{{RuntimeNodeID: nodeID, TemplateID: "route", Label: "Choose route", Status: orgsdk.NodeStatusFailed}},
+		Failure: &orgsdk.Failure{Code: "INVALID", Message: "<script>secret-token</script>" + strings.Repeat("x", 400), RuntimeNodeID: "forged", TemplateID: "forged", NodeLabel: "forged", OccurredAt: time.Now().UTC()},
+	}
+	encoded, _ := json.Marshal(unsafe)
+	executor := &fakeExecutor{describeResult: ExecutionState{Status: "failed"}, queryResult: encoded}
+	cp, auth := newTestControlPlane(t, Config{RegistryAllowlist: []string{"registry.example.com"}}, &fakeCluster{}, executor)
+	if _, err := cp.PublishVersion(context.Background(), auth, dynamicServiceWorkerVersionRequest(t, definition)); err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "DynamicWorkflow", Input: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := cp.GetInvocation(context.Background(), auth, invocation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Failure == nil || view.Failure.Code != "activity_failed" || strings.Contains(view.Failure.Message, "secret") || view.Failure.NodeLabel != "Choose route" {
+		t.Fatalf("redacted failure=%#v", view.Failure)
+	}
+
+	canceledProjection := unsafe
+	canceledProjection.Status = "completed"
+	canceledProjection.Nodes[0].Status = orgsdk.NodeStatusCanceled
+	canceledProjection.Failure = nil
+	executor.queryResult, _ = json.Marshal(canceledProjection)
+	executor.queryErr = nil
+	executor.describeResult = ExecutionState{Status: "canceled"}
+	second, err := cp.Start(context.Background(), auth, StartRequest{WorkerName: "payments-worker", Workflow: "DynamicWorkflow", Input: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := cp.GetInvocation(context.Background(), auth, second.ID)
+	if err != nil || canceled.Invocation.State != domain.InvocationCanceled || canceled.Failure != nil {
+		t.Fatalf("canceled view=%#v err=%v", canceled, err)
+	}
+}
+
 func TestGetInvocationRejectsDynamicProjectionOutsideManifest(t *testing.T) {
 	definition := dynamicServiceDefinition()
 	projection := orgsdk.Projection{
@@ -1033,6 +1113,7 @@ type fakeExecutor struct {
 	calls          []string
 	starts         []ExecutionStart
 	queryResult    []byte
+	queryErr       error
 	lastQuery      string
 	signals        []fakeSignal
 	signalErr      error
@@ -1089,6 +1170,9 @@ func (f *fakeExecutor) Describe(context.Context, domain.Invocation) (ExecutionSt
 }
 func (f *fakeExecutor) Query(_ context.Context, _ domain.Invocation, query string, _ []byte) ([]byte, error) {
 	f.lastQuery = query
+	if f.queryErr != nil {
+		return nil, f.queryErr
+	}
 	if f.queryResult != nil {
 		return f.queryResult, nil
 	}

@@ -135,6 +135,9 @@ func TestRunReadAPIsReturnValidatedProjectionActionLedgerAndConditionalETag(t *t
 			t.Fatalf("detail leaked %q: %s", forbidden, detail.Body.String())
 		}
 	}
+	if strings.Contains(detail.Body.String(), `"failure":`) {
+		t.Fatalf("successful Run must not expose a failure field: %s", detail.Body.String())
+	}
 
 	conditionalRequest := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run-1", nil)
 	conditionalRequest.Header.Set("If-None-Match", `"projection-r7"`)
@@ -142,6 +145,36 @@ func TestRunReadAPIsReturnValidatedProjectionActionLedgerAndConditionalETag(t *t
 	handler.ServeHTTP(conditional, conditionalRequest)
 	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 {
 		t.Fatalf("conditional status=%d body=%s", conditional.Code, conditional.Body.String())
+	}
+}
+
+func TestRunDetailReturnsOnlySafeFailureInformation(t *testing.T) {
+	now := time.Date(2026, 8, 2, 6, 0, 0, 0, time.UTC)
+	projection := orgsdk.Projection{
+		ContractVersion: orgsdk.ContractVersion, WorkflowName: "DynamicDecisionWorkflow", WorkerVersion: "v1", Revision: 8, Status: "failed",
+		Nodes: []orgsdk.NodeProjection{{RuntimeNodeID: "determine-aaaaaaaaaaaaaaaa", TemplateID: "determine-route", Label: "Determine route", Status: orgsdk.NodeStatusFailed}},
+	}
+	failure := &domain.RunFailure{Code: "invalid_route", Message: "Unsupported mode. Choose concise or detailed.", RuntimeNodeID: "determine-aaaaaaaaaaaaaaaa", TemplateID: "determine-route", NodeLabel: "Determine route", OccurredAt: now}
+	backend := &stubControlPlane{invocationView: service.InvocationView{
+		Invocation: domain.Invocation{ID: "run-failed", State: domain.InvocationFailed, Failure: "raw stack and secret=top-secret"},
+		Execution:  service.ExecutionState{Status: "failed"}, SemanticProjection: &projection, Failure: failure,
+	}}
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: backend})
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/runs/run-failed", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{`"failure":`, `"code":"invalid_route"`, `"message":"Unsupported mode. Choose concise or detailed."`, `"nodeLabel":"Determine route"`} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("detail missing %q: %s", want, response.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"raw stack", "top-secret"} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("detail leaked %q: %s", forbidden, response.Body.String())
+		}
 	}
 }
 

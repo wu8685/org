@@ -453,8 +453,18 @@ type Invocation struct {
 	Actor                    string          `json:"actor"`
 	State                    InvocationState `json:"state"`
 	Failure                  string          `json:"failure,omitempty"`
+	SafeFailure              *RunFailure     `json:"safeFailure,omitempty"`
 	CreatedAt                time.Time       `json:"createdAt"`
 	UpdatedAt                time.Time       `json:"updatedAt"`
+}
+
+type RunFailure struct {
+	Code          string    `json:"code"`
+	Message       string    `json:"message"`
+	RuntimeNodeID string    `json:"runtimeNodeId,omitempty"`
+	TemplateID    string    `json:"templateId,omitempty"`
+	NodeLabel     string    `json:"nodeLabel,omitempty"`
+	OccurredAt    time.Time `json:"occurredAt"`
 }
 
 type AuditRecord struct {

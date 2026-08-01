@@ -323,8 +323,25 @@
 			wrapper.append(el("span", {class: "run-block-reason", text: run.blockReason}));
 			aria.push(run.blockReason);
 		}
+		if (semanticStatus === "failed" && run.errorSummary) {
+			wrapper.append(el("span", {class: "run-error-summary", text: run.errorSummary.message}));
+			aria.push(`Run failed: ${run.errorSummary.message}`);
+		}
 		wrapper.setAttribute("aria-label", aria.join(". "));
 		return wrapper;
+	}
+
+	function runFailurePanel(failure) {
+		if (!failure) return null;
+		return el("section", {class: "run-failure-panel", role: "alert", "data-run-failure": ""}, [
+			el("h2", {text: "Run failed"}),
+			el("p", {class: "run-failure-message", text: failure.message}),
+			definition([
+				["Failure code", mono(failure.code)],
+				["Failed node", failure.nodeLabel || "—"],
+				["Occurred", failure.occurredAt ? new Date(failure.occurredAt).toLocaleString() : "—"],
+			]),
+		]);
 	}
 
   async function renderRuns(poll = false) {
@@ -353,6 +370,8 @@
       card([el("h2", {text: "Run"}), definition([["Run ID", mono(run.id)], ["Run description", run.description || "—"], ["Worker", run.workerName], ["Workflow", run.workflow], ["Selected version", mono(run.selectedVersion)], ["Release description", response.workerVersion.description]])]),
       card([el("h2", {text: "Live status"}), definition([["Execution", status(response.execution.status)], ["Projection", projection ? status(projection.runStatus) : "Unavailable"], ["Projection revision", projection?.projectionRevision ?? "—"], ["Allowed actions", projection?.allowedActions?.length || 0]])]),
     ]));
+		const failurePanel = runFailurePanel(response.failure);
+		if (failurePanel) content.append(failurePanel);
     if (response.temporalDiagnosticsUrl) content.append(section("Advanced diagnostics", card(link("Open advanced diagnostics ↗", response.temporalDiagnosticsUrl))));
     if (!projection) {
       showNotice("Semantic projection 暂不可用；Console 不会猜测业务 DAG。", true);

@@ -197,6 +197,17 @@ func TestConsoleDevDefaultsToLocalKindRegistriesWithoutChangingProductionDefault
 	if !strings.Contains(gettingStarted, "make console-dev") || !strings.Contains(gettingStarted, "org.local,ghcr.io") || !strings.Contains(gettingStarted, "local-dev default") {
 		t.Fatal("Getting Started must explain the local console registry default and explicit command")
 	}
+	startRun := read(t, filepath.Join(root, "docs", "api", "start-workflow-run.md"))
+	for _, want := range []string{"errorSummary", "failure", "invalid_route", "advanced diagnostics", "raw stack"} {
+		if !strings.Contains(startRun, want) {
+			t.Errorf("docs/api/start-workflow-run.md missing safe Run failure contract %q", want)
+		}
+	}
+	for _, want := range []string{"Failed", "安全错误摘要", "不显示 raw error"} {
+		if !strings.Contains(gettingStarted, want) {
+			t.Errorf("docs/getting-started.md missing safe failure guidance %q", want)
+		}
+	}
 }
 
 func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {

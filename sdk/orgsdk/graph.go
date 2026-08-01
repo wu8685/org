@@ -74,6 +74,7 @@ type Projection struct {
 	AllowedActions  []AllowedAction   `json:"allowedActions"`
 	ActionOutcomes  []ActionOutcome   `json:"actionOutcomes,omitempty"`
 	RecentEvents    []ProjectionEvent `json:"recentEvents,omitempty"`
+	Failure         *Failure          `json:"failure,omitempty"`
 }
 
 type AllowedAction struct {
@@ -115,6 +116,7 @@ type Graph struct {
 	Nodes            []NodeProjection
 	ProjectionEvents []ProjectionEvent
 	ActionRecords    []ActionOutcome
+	Failure          *Failure
 	terminalStatus   string
 }
 
@@ -285,6 +287,25 @@ func (g *Graph) Fail(reason string, now time.Time) error {
 	return nil
 }
 
+func (g *Graph) recordFailure(runtimeNodeID string, payload safeFailurePayload, now time.Time) error {
+	failure := &Failure{Code: payload.Code, Message: payload.Message, RuntimeNodeID: runtimeNodeID, OccurredAt: now}
+	if runtimeNodeID != "" {
+		index := g.nodeIndex(runtimeNodeID)
+		if index < 0 {
+			return errors.New("failure node does not exist")
+		}
+		failure.TemplateID = g.Nodes[index].TemplateID
+		failure.NodeLabel = g.Nodes[index].Label
+	}
+	previous := g.Failure
+	g.Failure = failure
+	if !g.withinProjectionBound() {
+		g.Failure = previous
+		return errors.New("maximum projection bytes exceeded")
+	}
+	return nil
+}
+
 func (g *Graph) Skip(id, reason string, now time.Time) error {
 	return g.Transition(id, NodeStatusSkipped, reason, now)
 }
@@ -349,7 +370,12 @@ func (g *Graph) Snapshot() Projection {
 		eventStart = len(g.ProjectionEvents) - 64
 	}
 	recentEvents := append([]ProjectionEvent(nil), g.ProjectionEvents[eventStart:]...)
-	return Projection{ContractVersion: "org.worker/v1", WorkflowName: g.WorkflowName, WorkerVersion: g.WorkerVersion, Revision: uint64(len(g.ProjectionEvents)), Status: status, Nodes: nodes, CurrentNodeIDs: current, AllowedActions: actions, ActionOutcomes: outcomes, RecentEvents: recentEvents}
+	var failure *Failure
+	if g.Failure != nil {
+		copied := *g.Failure
+		failure = &copied
+	}
+	return Projection{ContractVersion: "org.worker/v1", WorkflowName: g.WorkflowName, WorkerVersion: g.WorkerVersion, Revision: uint64(len(g.ProjectionEvents)), Status: status, Nodes: nodes, CurrentNodeIDs: current, AllowedActions: actions, ActionOutcomes: outcomes, RecentEvents: recentEvents, Failure: failure}
 }
 
 func (g *Graph) nodeIndex(id string) int {

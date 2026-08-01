@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/sdk/orgsdk"
@@ -109,6 +111,7 @@ type InvocationView struct {
 	Execution              ExecutionState            `json:"execution"`
 	Projection             domain.WorkflowProjection `json:"projection"`
 	SemanticProjection     *orgsdk.Projection        `json:"semanticProjection,omitempty"`
+	Failure                *domain.RunFailure        `json:"failure,omitempty"`
 	TemporalDiagnosticsURL string                    `json:"temporalDiagnosticsUrl,omitempty"`
 }
 type WorkerView struct {
@@ -934,6 +937,12 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 	}
 	projectionJSON, err := c.executor.Query(ctx, inv, contract.ProjectionQuery, nil)
 	if err != nil {
+		if inv.State == domain.InvocationFailed && inv.SafeFailure != nil {
+			failure := *inv.SafeFailure
+			view := InvocationView{Invocation: inv, WorkerVersion: version, Execution: state, Failure: &failure}
+			result = view
+			return view, nil
+		}
 		return InvocationView{}, err
 	}
 	view := InvocationView{Invocation: inv, WorkerVersion: version, Execution: state}
@@ -946,6 +955,19 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 			return InvocationView{}, fmt.Errorf("invalid Worker projection: %w", err)
 		}
 		view.SemanticProjection = &projection
+		if inv.State == domain.InvocationFailed {
+			if inv.SafeFailure == nil {
+				inv.SafeFailure = safeRunFailure(projection, inv)
+				if err := c.store.SaveInvocation(tenant.ID, inv); err != nil {
+					return InvocationView{}, err
+				}
+				view.Invocation = inv
+			}
+			if inv.SafeFailure != nil {
+				failure := *inv.SafeFailure
+				view.Failure = &failure
+			}
+		}
 	} else {
 		var projection domain.WorkflowProjection
 		if err := json.Unmarshal(projectionJSON, &projection); err != nil {
@@ -959,6 +981,63 @@ func (c *ControlPlane) GetInvocation(ctx context.Context, auth AuthenticatedCont
 	}
 	result = view
 	return view, nil
+}
+
+var safeRunFailureCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+func safeRunFailure(projection orgsdk.Projection, invocation domain.Invocation) *domain.RunFailure {
+	if projection.Status != "failed" {
+		return nil
+	}
+	var failedNode *orgsdk.NodeProjection
+	for index := range projection.Nodes {
+		if projection.Nodes[index].Status == orgsdk.NodeStatusFailed || projection.Nodes[index].Status == orgsdk.NodeStatusTimedOut {
+			failedNode = &projection.Nodes[index]
+			break
+		}
+	}
+	occurredAt := invocation.UpdatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	fallback := &domain.RunFailure{Code: "workflow_failed", Message: "Workflow failed. Open advanced diagnostics if authorized.", OccurredAt: occurredAt}
+	if failedNode != nil {
+		fallback.Code = "activity_failed"
+		fallback.Message = "Activity failed. Open advanced diagnostics if authorized."
+		fallback.RuntimeNodeID, fallback.TemplateID, fallback.NodeLabel = failedNode.RuntimeNodeID, failedNode.TemplateID, failedNode.Label
+	}
+	declared := projection.Failure
+	if declared == nil || !safeRunFailureText(declared.Code, declared.Message) {
+		return fallback
+	}
+	result := &domain.RunFailure{Code: declared.Code, Message: strings.TrimSpace(declared.Message), OccurredAt: declared.OccurredAt}
+	if result.OccurredAt.IsZero() {
+		result.OccurredAt = occurredAt
+	}
+	if declared.RuntimeNodeID == "" {
+		if declared.TemplateID != "" || declared.NodeLabel != "" {
+			return fallback
+		}
+		return result
+	}
+	if failedNode == nil || declared.RuntimeNodeID != failedNode.RuntimeNodeID || declared.TemplateID != failedNode.TemplateID || declared.NodeLabel != failedNode.Label {
+		return fallback
+	}
+	result.RuntimeNodeID, result.TemplateID, result.NodeLabel = failedNode.RuntimeNodeID, failedNode.TemplateID, failedNode.Label
+	return result
+}
+
+func safeRunFailureText(code, message string) bool {
+	message = strings.TrimSpace(message)
+	if !safeRunFailureCodePattern.MatchString(code) || message == "" || utf8.RuneCountInString(message) > 300 || strings.Count(message, "\n") > 3 {
+		return false
+	}
+	for _, value := range message {
+		if unicode.IsControl(value) && value != '\n' {
+			return false
+		}
+	}
+	return true
 }
 
 func isTerminalInvocationState(state domain.InvocationState) bool {

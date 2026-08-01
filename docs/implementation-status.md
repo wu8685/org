@@ -44,6 +44,7 @@ Implemented and covered by tests:
 - Runs list exposes safe projection-derived `running` / `waiting-for-user` / terminal text, current-node and update-time summaries without action payloads; low-frequency polling uses a Tenant-bound ETag so `304` refreshes cannot cross Tenant context;
 - loopback-only local Console executable with server-configured development Tenant/principal identity; request headers cannot override Tenant.
 - real local Console acceptance across `kind-org` and host Temporal: Hello covers Worker/Workflow plus Current and historical pinned Run reads; parallel-confirmation submits and retries the authorized action through the HTTP Gateway then polls accepted outcome; dynamic-decision verifies both runtime branches expose the unselected node as `skipped` through the Console Run API.
+- Org SDK typed safe failure projection and control-plane validation are implemented; failed Run list/detail reads persist bounded code/message/node/time without exposing raw Worker or Temporal errors, and Console renders the result with accessible text-only error UI.
 
 Still deferred:
 

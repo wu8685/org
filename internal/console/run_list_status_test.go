@@ -120,6 +120,59 @@ func TestRunListConditionalETagTracksProjectionAndTenant(t *testing.T) {
 	}
 }
 
+func TestRunListReturnsBoundedSafeFailureSummaryAndTracksItInETag(t *testing.T) {
+	now := time.Date(2026, 8, 2, 5, 0, 0, 0, time.UTC)
+	run := domain.Invocation{ID: "run-failed", State: domain.InvocationFailed, UpdatedAt: now}
+	view := runListView(run, 4, "failed", orgsdk.NodeProjection{Label: "Determine <route>", Status: orgsdk.NodeStatusFailed, CompletedAt: now})
+	view.Failure = &domain.RunFailure{
+		Code: "invalid_route", Message: strings.Repeat("路", 170) + "<script>alert(1)</script>",
+		RuntimeNodeID: "node-aaaaaaaaaaaaaaaa", TemplateID: "determine-route", NodeLabel: "Determine <route>", OccurredAt: now,
+	}
+	backend := &stubControlPlane{runs: []domain.Invocation{run}, invocationViews: map[string]service.InvocationView{run.ID: view}}
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: backend})
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", first.Code, first.Body.String())
+	}
+	var body struct {
+		Items []struct {
+			ErrorSummary *struct {
+				Code, Message, NodeLabel string
+				OccurredAt               time.Time
+			} `json:"errorSummary"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ErrorSummary == nil {
+		t.Fatalf("missing errorSummary: %s", first.Body.String())
+	}
+	summary := body.Items[0].ErrorSummary
+	if summary.Code != "invalid_route" || summary.NodeLabel != "Determine <route>" || summary.OccurredAt != now {
+		t.Fatalf("summary=%#v", summary)
+	}
+	if len([]rune(summary.Message)) != 160 || strings.Contains(summary.Message, "<script>") {
+		t.Fatalf("message must be safely bounded before markup rendering: %q", summary.Message)
+	}
+
+	etag := first.Header().Get("ETag")
+	changedView := backend.invocationViews[run.ID]
+	changedFailure := *changedView.Failure
+	changedFailure.Message = "A different safe message"
+	changedView.Failure = &changedFailure
+	backend.invocationViews[run.ID] = changedView
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	request.Header.Set("If-None-Match", etag)
+	changed := httptest.NewRecorder()
+	handler.ServeHTTP(changed, request)
+	if changed.Code != http.StatusOK || changed.Header().Get("ETag") == etag {
+		t.Fatalf("failure change must invalidate list ETag: status=%d etag=%q body=%s", changed.Code, changed.Header().Get("ETag"), changed.Body.String())
+	}
+}
+
 func runListView(invocation domain.Invocation, revision uint64, status string, node orgsdk.NodeProjection) service.InvocationView {
 	node.RuntimeNodeID = "node-aaaaaaaaaaaaaaaa"
 	projection := &orgsdk.Projection{

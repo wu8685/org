@@ -72,7 +72,15 @@ func NewWorkflowDefinition[I, O any](name, version string, contract Definition, 
 		startActionDispatcher(runtimeContext)
 		output, runErr := run(runtimeContext, input)
 		if runErr != nil {
-			_ = graph.Fail("workflow-error", workflow.Now(ctx))
+			now := workflow.Now(ctx)
+			if graph.Failure == nil {
+				_ = graph.recordFailure("", genericWorkflowFailure(), now)
+			}
+			reason := "workflow_failed"
+			if graph.Failure != nil {
+				reason = graph.Failure.Code
+			}
+			_ = graph.Fail(reason, now)
 			return output, runErr
 		}
 		if err := graph.Complete(workflow.Now(ctx)); err != nil {
@@ -177,7 +185,11 @@ func NewActivity[I, O any](name string, policy ActivityPolicy, handler func(Acti
 				config.hook.AfterActivity(ctx, event)
 			}()
 		}
-		return handler(activityContext, invocation.Value)
+		output, err = handler(activityContext, invocation.Value)
+		if err != nil {
+			err = encodeUserError(err)
+		}
+		return output, err
 	}
 	return definition
 }
@@ -259,7 +271,9 @@ func (f ActivityFuture[O]) Get() (NodeRef, O, error) {
 	err := f.future.Get(f.ctx.temporal, &output)
 	now := workflow.Now(f.ctx.temporal)
 	if err != nil {
-		_ = f.ctx.graph.Transition(f.node.ID, NodeStatusFailed, "activity-failed", now)
+		failure := decodeActivityFailure(err)
+		_ = f.ctx.graph.Transition(f.node.ID, NodeStatusFailed, failure.Code, now)
+		_ = f.ctx.graph.recordFailure(f.node.ID, failure, now)
 		return f.node, output, err
 	}
 	if err := f.ctx.graph.Transition(f.node.ID, NodeStatusCompleted, "", now); err != nil {
