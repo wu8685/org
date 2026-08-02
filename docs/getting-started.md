@@ -15,8 +15,9 @@
 
 ## 前置条件
 
-- Go 1.26
-- Docker
+- 已验证的 golden path：macOS + Docker Desktop + 本机 kind。Linux 或其他 container runtime 可以用于开发，但尚未作为本教程的完整验证环境。
+- Go 1.26（用于构建 Worker）
+- Docker Desktop 正在运行
 - `kubectl`
 - `kind`
 - Temporal CLI
@@ -29,6 +30,8 @@
 ```sh
 make check-tools
 ```
+
+`make check-tools` 只检查 `docker`、`kubectl`、`kind` 与 Temporal CLI 是否在 PATH；它不检查 Go、make、Docker daemon、端口占用或版本兼容性。继续前请自行确认 `go version`、`make --version` 与 `docker info` 均成功。
 
 整个过程需要三个终端：
 
@@ -49,7 +52,7 @@ kubectl --context kind-org get nodes
 
 ### 检查点
 
-输出中应出现一个状态为 `Ready` 的 node，当前 context 名为 `kind-org`。
+输出中应出现一个状态为 `Ready` 的 node。后续命令显式使用 `--context kind-org`；如果你希望把它设成当前 context，可自行运行 `kubectl config use-context kind-org`。
 
 如果这里失败，先修复 Docker、`kind` 或 `kubectl`，不要继续后面的步骤。
 

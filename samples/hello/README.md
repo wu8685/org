@@ -17,6 +17,10 @@ prepare-greeting → compose-greeting → completed
 - Org SDK 如何把执行过程投影成三个业务节点。
 - 一个独立 Worker repository 如何测试、构建并输出 immutable digest。
 
+## 运行前提
+
+只阅读或测试本 Sample：需要 Go 1.26、`make` 和可访问 module 依赖。构建 image 还需要运行中的 Docker；执行 `make kind-load` 还需要 `kind-org`、`kind`、`kubectl` 和 `crictl`。要把它发布并运行，请先按 [本地快速上手](../../docs/getting-started.md) 启动 Console 与 Temporal。
+
 ## 先看两处
 
 - `definition.go`：typed Definition、节点依赖与 retry/timeout policy；

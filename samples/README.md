@@ -24,6 +24,12 @@
 
 进入目录后即可测试、构建、push 或加载到 kind，不依赖 org 根 Makefile，也不 import org internal package。
 
+## 开始前
+
+每个 Sample 是一个独立 Go repository；你可以复制它再改成自己的 Worker。运行其测试至少需要 Go 1.26 和 `make`；构建 image 需要正在运行的 Docker daemon；`make kind-load` 还需要一个存在且可用的 `kind-org` cluster、`kind`、`kubectl` 和 `crictl`。要把 Sample 真正发布并运行，还需要按[本地快速上手](../docs/getting-started.md)启动 org Console 和 Temporal。
+
+本地教程已在 macOS + Docker Desktop + kind 上验证。若你使用 Linux 或其他 container runtime，请先验证 kind Pod 能访问你的 Temporal 和 Console bootstrap endpoint，再发布 Worker。
+
 ## 共同命令
 
 以下命令以 Hello 为例；切换到另一个 Sample 目录后用法相同：

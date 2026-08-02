@@ -20,6 +20,10 @@ approval-gate → build-plan → summary ───┐
 - 两个 runtime branch 如何并行启动并在 join 汇合。
 - action delivery 和 Workflow acceptance 为什么是两个不同状态。
 
+## 运行前提
+
+只阅读或测试本 Sample：需要 Go 1.26、`make` 和可访问 module 依赖。构建 image 还需要运行中的 Docker；执行 `make kind-load` 还需要 `kind-org`、`kind`、`kubectl` 和 `crictl`。要把它发布并运行，请先按 [本地快速上手](../../docs/getting-started.md) 启动 Console 与 Temporal。
+
 ## 业务代码
 
 - `definition.go`：`AwaitConfirmation`、runtime fork/join 与 projection。

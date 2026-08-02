@@ -16,6 +16,7 @@
 
 | 你要做什么 | 从哪里开始 |
 |---|---|
+| 从零编写一个可托管的 Org SDK Worker | [编写你的第一个 Worker](write-your-worker.md) |
 | 理解 Worker 代码由哪些部分组成 | [核心概念](concepts.md) |
 | 查看最小顺序 Workflow | [Hello Sample](../samples/hello/README.md) |
 | 加入人工确认和并行分支 | [Parallel Confirmation Sample](../samples/parallel-confirmation/README.md) |
@@ -55,7 +56,8 @@
     → Hello Sample
 
 Worker 开发者
-  Sample 学习路径
+  编写你的第一个 Worker
+    → Sample 学习路径
     → 发布 WorkerVersion
     → 架构概览
 

@@ -25,6 +25,7 @@ README.md
 docs/README.md
 docs/concepts.md
 docs/getting-started.md
+docs/write-your-worker.md
 docs/architecture/overview.md
 docs/api/publish-worker-version.md
 samples/README.md

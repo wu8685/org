@@ -1,8 +1,8 @@
 # org
 
-org 让用户通过 Agent 写 code 来完成自定义流程编排，再把 Workflow 交给统一控制面运行。Agent 负责把业务意图变成可测试的流程代码；org 负责版本、注册、运行、状态观察和人工操作。
+org 是一个用 Go code 定义、并由平台托管运行长期 Workflow 的项目。你使用 Org SDK 编写步骤、并行关系、运行时分支和人工确认；org 负责部署 Worker、管理版本、可靠运行、权限校验和状态展示。
 
-传统流程编排产品通常要求用户学习画布、节点配置或专用 DSL。org 选择 code 作为流程定义：你可以直接告诉 Agent 想解决什么问题，让 Agent 编写 Definition、Workflow、Activities 和 tests。代码仍在你自己的 repository 里，可以 review、测试、提交，也可以继续让 Agent 修改。
+传统流程编排产品通常要求用户学习画布、节点配置或专用 DSL。org 选择 code 作为流程定义：代码仍在你自己的 repository 里，可以 review、测试、提交和持续演进。你可以自己写，也可以让 coding Agent 以 Sample 为起点协助编写；Agent 不是运行时依赖。
 
 ## 从一句需求到一个 Workflow
 
@@ -30,11 +30,11 @@ Dockerfile      可发布的 Worker image
 
 ```text
 业务意图
-  → Agent 写 code
+  → 开发者写 code（可使用 coding Agent）
   → 本地测试与 code review
   → CI 构建 immutable Worker image
   → 在 org 发布 Worker Version
-  → org 动态加载和注册新的 Workflow contract
+  → org 部署 Worker，并验证 SDK 自动注册的 Workflow contract
   → 用户在 Console 中触发、观察和操作 Run
 ```
 
@@ -44,7 +44,7 @@ Dockerfile      可发布的 Worker image
 
 静态 DAG 很适合固定步骤，但真实流程经常包含运行时分支、fan-out、人工等待和补偿。code 能直接表达这些行为，也能使用正常的软件工程工具验证它们。
 
-Agent 让写 code 的门槛降下来。用户主要描述业务约束和验收结果，不必从空文件开始手写框架代码；生成结果仍然经过 compiler、tests 和 review，而不是把一段自然语言直接交给生产环境执行。
+coding Agent 可以让写 code 的门槛降下来：你描述业务约束和验收结果，它帮助从 Sample 起步；生成结果仍要经过 compiler、tests 和 review，而不是把自然语言直接交给生产环境执行。
 
 这也意味着：
 
