@@ -58,7 +58,7 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 				}
 			}
 			readme := read(t, filepath.Join(dir, "README.md"))
-			for _, want := range []string{"make test", "make push", "make kind-load", "IMAGE_DIGEST", "自动注册", "平台注入", "SOURCE_REVISION=abcdef1", `COMMIT="$SOURCE_REVISION"`} {
+			for _, want := range []string{"make verify", "make push", "make kind-load", "IMAGE_DIGEST", "自动注册", "平台注入", "SOURCE_REVISION=abcdef1", `COMMIT="$SOURCE_REVISION"`} {
 				if !strings.Contains(readme, want) {
 					t.Errorf("README missing %q", want)
 				}
@@ -219,7 +219,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md", "Local Development", "当前 Tenant"},
 		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
 		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
-		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "make test", "make kind-load", "skipped", "waiting-for-user"},
+		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "官方 Sample", "首次体验", "修改后验证", "make verify", "make kind-load", "skipped", "waiting-for-user"},
 	}
 	development := read(t, filepath.Join(root, "docs", "development.md"))
 	for _, want := range []string{"ORG_CONSOLE_TENANTS", "authorized Tenant", "server-side", "刷新", "重启"} {
@@ -285,6 +285,19 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 		for _, want := range []string{"100m", "128Mi", "production", "Activity", "2–5 秒", "随机", "running", "仅用于教学演示"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing resource guidance %q", relative, want)
+			}
+		}
+	}
+	for _, relative := range []string{"samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+		text := read(t, filepath.Join(root, relative))
+		for _, forbidden := range []string{"## 测试", "make test\nmake vet\nmake verify"} {
+			if strings.Contains(text, forbidden) {
+				t.Errorf("%s still puts maintainer verification in the first-run path: %q", relative, forbidden)
+			}
+		}
+		for _, want := range []string{"首次体验", "修改后验证", "make verify"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing newcomer/developer path separation %q", relative, want)
 			}
 		}
 	}

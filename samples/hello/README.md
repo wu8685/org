@@ -1,82 +1,30 @@
 # Hello Org SDK Worker
 
-这是最小的 Org SDK Worker repository。它用两个无外部副作用的 Activity 生成问候语，并把顺序执行路径投影给 org：
+Hello 是最小的 Org SDK Worker。它接收一个名字，用两个顺序 Activity 生成问候语，并在 Console 中展示完整执行过程：
 
 ```text
 prepare-greeting → compose-greeting → completed
 ```
 
+输入 `name: Codex`，最终得到 `Hello, Codex!`。
+
 > 产品术语遵循 [org glossary](https://github.com/wu8685/org/blob/main/docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
 
-## 这个 Sample 教什么
+## 首次体验会看到什么
 
-完成后，你应该能说明：
+触发 `HelloWorkflow` 后，打开 Run detail：
 
-- Definition 如何声明 Workflow 和 Activity。
-- 两个 Activity 如何按依赖顺序执行。
-- Org SDK 如何把执行过程投影成三个业务节点。
-- 一个独立 Worker repository 如何测试、构建并输出 immutable digest。
+1. `prepare-greeting` 很快变为 `completed`；
+2. `compose-greeting` 保持约 10 秒 `running`；
+3. `completed` 最终完成，结果显示 `Hello, Codex!`。
 
-## 运行前提
+约 10 秒的等待是 Sample 故意加入的教学演示延迟，目的是让你看清 Activity 状态变化，不是平台卡住。production Worker 不应照搬人为 sleep；复制本 Sample 时应删除该 option，让 projection 反映真实业务耗时。
 
-只阅读或测试本 Sample：需要 Go 1.26、`make` 和可访问 module 依赖。构建 image 还需要运行中的 Docker；执行 `make kind-load` 还需要 `kind-org`、`kind`、`kubectl` 和 `crictl`。要把它发布并运行，请先按 [本地快速上手](https://github.com/wu8685/org/blob/main/docs/getting-started.md) 启动 Console 与 Temporal。
+## 首次体验：直接构建并运行
 
-## 先看两处
+官方 Sample 已经通过项目测试。第一次体验不需要先运行 `make test` 或 `make vet`；请按[本地快速上手](https://github.com/wu8685/org/blob/main/docs/getting-started.md)启动 Console、Temporal 和 `kind-org`。
 
-- `definition.go`：typed Definition、节点依赖与 retry/timeout policy；
-- `activities.go`：业务输入校验和问候语生成。
-
-Sample 不 import raw Temporal SDK，不手写 projection 或平台 routing。Org SDK 负责 stable node/Activity ID、dynamic semantic projection 和启动时 contract registration。
-
-为了让第一次演示时能看见处理中状态，`ComposeGreeting` Activity 默认包含约 10 秒的教学演示延迟。它只发生在 Activity 中，可通过 `WithComposeGreetingDelay` 调整；Workflow 本身不 sleep，也不影响 replay determinism。
-
-## 测试
-
-从本目录运行：
-
-```sh
-make test
-make vet
-# 或一次执行
-make verify
-```
-
-测试注入 no-op sleeper，因此不会等待 10 秒。预期结果：输入 `{"name":"Codex"}` 后返回 `Hello, Codex!`，projection 中的三个节点均为 `completed`。
-
-## 构建本地 image
-
-```sh
-SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
-make image \
-  VERSION=2026.08.1 \
-  COMMIT="$SOURCE_REVISION"
-```
-
-Docker build context 只有当前 repository。命令输出可读 tag；发布 WorkerVersion 仍必须使用 immutable digest。
-
-## Push 到 registry
-
-先用 Docker 完成 registry login，再运行：
-
-```sh
-SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
-make push \
-  IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
-  VERSION=2026.08.1 \
-  COMMIT="$SOURCE_REVISION"
-```
-
-成功后输出：
-
-```text
-IMAGE_DIGEST=registry.example.com/team/hello-worker@sha256:<digest>
-```
-
-脚本不保存 registry credential。不要从 tag 文本推测 digest，始终使用 registry 返回值。
-
-## 加载到本地 kind
-
-已有 `kind-org` 时：
+`make kind-load` 的宿主机依赖是 Docker、kind 和已存在的目标 cluster，不要求宿主机安装 `crictl`。在本目录运行：
 
 ```sh
 SOURCE_REVISION=abcdef1 # 替换为你的 7–64 位 hexadecimal source revision
@@ -85,26 +33,65 @@ make kind-load \
   COMMIT="$SOURCE_REVISION"
 ```
 
-它会构建、加载 image 并输出 `IMAGE_DIGEST=org.local/hello-worker@sha256:...`。
+复制输出的 `IMAGE_DIGEST=org.local/hello-worker@sha256:...`，然后：
 
-## 在 org 中运行
+1. 在 Console 创建 Worker `hello-worker`；
+2. 点击“录入版本”，填写 Version description、`IMAGE_DIGEST`、`100m` CPU 和 `128Mi` memory，再点击“开始发布”；
+3. 等待 SDK registration、poller 与 probe 完成；
+4. 触发 `HelloWorkflow`。Trigger editor 默认使用 YAML，输入 `name: Codex`；切换为 JSON 时输入 `{"name":"Codex"}`。只读 schema 用于核对业务 payload，不会生成固定输入字段；
+5. Run description 为可选说明，不属于 Workflow payload，也不要包含 Secret；
+6. 按上一节的时间线观察 Run detail。
 
-1. 在 Console 创建 Worker `hello-worker`。
-2. 新建 Version，填写 version-level description、`IMAGE_DIGEST`、`100m` CPU 和 `128Mi` memory；无需填写源码来源或上传合同文件。
-3. 等待候选 Worker 完成 SDK registration、poller 与 probe。
-4. 触发 `HelloWorkflow`。Trigger editor 默认使用 YAML，可输入 `name: Codex`；切换为 JSON 时输入 `{"name":"Codex"}`。只读 schema 是参考，不会生成固定业务字段。
-5. 可选填写 Run description，说明为何启动这一次 Run；它不属于 payload，也不要包含 Secret。
-6. 立即打开 Run detail：`prepare-greeting` 很快完成，`compose-greeting` 会保持约 10 秒 `running`，随后进入 `completed`。
-7. 等待最终结果 `Hello, Codex!`。
+## 代码与运行过程如何对应
 
-Org SDK 在 Worker 启动时从 typed Definition 生成 contract 并自动注册。用户不管理 contract artifact，Console 只读展示注册结果。
+- `types.go`：Worker、Workflow 名以及 input/output 类型；
+- `definition.go`：typed Definition、节点依赖、retry/timeout policy 和教学延迟；
+- `activities.go`：输入校验与问候语生成；
+- `cmd/worker/main.go`：加载平台注入配置并启动 Worker；
+- `*_test.go`：验证业务行为、执行顺序、projection 和 contract。
 
-> 这段延迟只为了让 Console 演示更容易观察，不代表真实业务处理。production Worker 不应照搬人为 sleep；删除该 option，让 projection 反映 Activity 的实际生命周期。
+Sample 不 import raw Temporal SDK，不手写 projection 或平台 routing。Org SDK 根据 typed Definition 生成 contract，并在 Worker 启动时自动注册。
 
-## 发布输入与平台配置
+## 复制成自己的 Worker
 
-部署时 org 平台注入执行连接、候选 Pod identity 和一次性注册材料。它们不是用户填写的 `.env` 配置，也不得打进 image 或提交到 Git。
+不要只修改 `activities.go`。至少逐项检查：
 
-用户只维护业务 Definition/Activities 和 image。Version description、resources 与 Secret reference 通过 org 发布接口提交；可信审计 metadata 由平台记录。完整字段说明见 [发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
+1. 修改 `go.mod` module，并同步更新 `cmd/worker/main.go` 的 import；
+2. 修改 `types.go` 中的 WorkerName、WorkflowName、input 和 output；
+3. 修改 Definition 名、Activity ID、节点 ID 与依赖关系；
+4. 用自己的业务逻辑替换 `activities.go`；
+5. 删除 `WithComposeGreetingDelay` 教学延迟；
+6. 修改 Makefile 的默认 image repository 和 Dockerfile 的 OCI source label；
+7. 修改 tests，使其描述你的业务行为；
+8. 使用新的 Version 构建并发布，不要覆盖已经提交的 WorkerVersion。
 
-真实 write Activity 必须使用 stable idempotency key，或声明 reconciliation/compensation policy；平台不声称外部效果 exactly once。
+## 修改后验证
+
+复制或修改代码后运行：
+
+```sh
+make verify
+```
+
+它会执行 Go tests 和 `go vet`。测试使用 no-op sleeper，因此不会真的等待约 10 秒；测试断言会验证 `Hello, Codex!`、三个节点的最终状态和生成的 contract。通过后再执行 `make kind-load` 或 `make push`。
+
+## 构建或推送 image
+
+只在本机生成 image：
+
+```sh
+SOURCE_REVISION=abcdef1
+make image VERSION=2026.08.1 COMMIT="$SOURCE_REVISION"
+```
+
+推送到自己的 registry：
+
+```sh
+SOURCE_REVISION=abcdef1
+make push \
+  IMAGE_REPOSITORY=registry.example.com/team/hello-worker \
+  VERSION=2026.08.1 \
+  COMMIT="$SOURCE_REVISION"
+```
+
+构建 context 只有当前 repository。脚本不保存 registry credential；发布时使用命令输出的 immutable `IMAGE_DIGEST`。通用字段、安全边界和 Secret reference 见[发布 WorkerVersion](https://github.com/wu8685/org/blob/main/docs/api/publish-worker-version.md)。
