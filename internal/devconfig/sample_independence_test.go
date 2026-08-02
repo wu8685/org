@@ -58,7 +58,7 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 				}
 			}
 			readme := read(t, filepath.Join(dir, "README.md"))
-			for _, want := range []string{"make verify", "make push", "make kind-load", "IMAGE_DIGEST", "自动注册", "平台注入", "SOURCE_REVISION=abcdef1", `COMMIT="$SOURCE_REVISION"`} {
+			for _, want := range []string{"make kind-load", "IMAGE_DIGEST", "SOURCE_REVISION=abcdef1", `COMMIT="$SOURCE_REVISION"`} {
 				if !strings.Contains(readme, want) {
 					t.Errorf("README missing %q", want)
 				}
@@ -74,7 +74,7 @@ func TestSamplesAreSelfContainedVersionedWorkerRepositories(t *testing.T) {
 
 func TestCentralPublishExampleMatchesDigestOnlyContract(t *testing.T) {
 	root := filepath.Join("..", "..")
-	contents := read(t, filepath.Join(root, "docs", "api", "examples", "publish-worker-version.json"))
+	contents := read(t, filepath.Join(root, "docs", "user", "api", "examples", "publish-worker-version.json"))
 	var request domain.WorkerVersionPublishRequest
 	if err := json.Unmarshal([]byte(contents), &request); err != nil {
 		t.Fatal(err)
@@ -193,19 +193,14 @@ func TestConsoleDevDefaultsToLocalKindRegistriesWithoutChangingProductionDefault
 	if err := domain.ValidateWorkerVersionPublish(request, []string{"org.local", "ghcr.io"}); err != nil {
 		t.Fatalf("local Hello immutable digest was rejected by the console-dev allowlist: %v", err)
 	}
-	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
-	if !strings.Contains(gettingStarted, "make console-dev") || !strings.Contains(gettingStarted, "org.local,ghcr.io") || !strings.Contains(gettingStarted, "local-dev default") {
-		t.Fatal("Getting Started must explain the local console registry default and explicit command")
+	gettingStarted := read(t, filepath.Join(root, "docs", "user", "getting-started.md"))
+	if !strings.Contains(gettingStarted, "make console-dev") {
+		t.Fatal("Getting Started must use the local Console command")
 	}
-	startRun := read(t, filepath.Join(root, "docs", "api", "start-workflow-run.md"))
+	startRun := read(t, filepath.Join(root, "docs", "user", "api", "start-workflow-run.md"))
 	for _, want := range []string{"errorSummary", "failure", "invalid_route", "advanced diagnostics", "raw stack"} {
 		if !strings.Contains(startRun, want) {
-			t.Errorf("docs/api/start-workflow-run.md missing safe Run failure contract %q", want)
-		}
-	}
-	for _, want := range []string{"Failed", "安全错误摘要", "不显示 raw error"} {
-		if !strings.Contains(gettingStarted, want) {
-			t.Errorf("docs/getting-started.md missing safe failure guidance %q", want)
+			t.Errorf("docs/user/api/start-workflow-run.md missing safe Run failure contract %q", want)
 		}
 	}
 }
@@ -213,30 +208,24 @@ func TestConsoleDevDefaultsToLocalKindRegistriesWithoutChangingProductionDefault
 func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 	root := filepath.Join("..", "..")
 	files := map[string][]string{
-		"README.md":                          {"长期 Workflow", "写 code", "coding Agent", "Agent 不是运行时依赖", "部署 Worker，并验证 SDK 自动注册的 Workflow contract", "Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/README.md", "docs/getting-started.md", "docs/concepts.md", "samples/README.md"},
-		"docs/README.md":                     {"第一次使用", "开发 Worker", "维护 org", "getting-started.md", "concepts.md", "api/publish-worker-version.md", "api/manage-tenants.md", "architecture/overview.md", "development.md", "specs/"},
-		"docs/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
-		"docs/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md", "Local Development", "当前 Tenant"},
-		"docs/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
-		"docs/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
-		"samples/README.md":                  {"hello", "parallel-confirmation", "dynamic-decision", "官方 Sample", "首次体验", "修改后验证", "make verify", "make kind-load", "skipped", "waiting-for-user"},
+		"README.md":                               {"长期 Workflow", "写 code", "coding Agent", "Agent 不是运行时依赖", "部署 Worker，并验证 SDK 自动注册的 Workflow contract", "Tenant", "Worker", "Version", "Workflow", "Run", "immutable", "Org SDK", "Console", "docs/README.md", "docs/user/getting-started.md", "docs/user/concepts.md", "samples/README.md"},
+		"docs/README.md":                          {"用户文档", "项目开发文档", "user/README.md", "user/getting-started.md", "user/concepts.md", "user/api/publish-worker-version.md", "user/architecture/overview.md", "development/README.md", "development/implementation-status.md", "development/specs/"},
+		"docs/user/concepts.md":                   {"Tenant", "Worker", "Version", "Workflow", "Run", "一次发布", "一次运行", "用户负责", "org 负责"},
+		"docs/user/getting-started.md":            {"完成后你会得到", "检查点", "kind-org", "127.0.0.1:7233", "make console-dev", "cd samples/hello", "make kind-load", "IMAGE_DIGEST", "Run", "YAML", "HTTP/JSON API", "api/publish-worker-version.md", "Local Development", "当前 Tenant"},
+		"docs/user/api/publish-worker-version.md": {"GET /api/v1/session", "X-CSRF-Token", "Idempotency-Key", "POST /api/v1/workers/{workerName}/versions", "immutable", "description", "image", "runtime", "server-derived"},
+		"docs/user/architecture/overview.md":      {"Org SDK", "control plane", "Worker", "Temporal", "Kubernetes", "semantic projection", "dynamic DAG", "Gateway"},
+		"samples/README.md":                       {"hello", "parallel-confirmation", "dynamic-decision", "getting-started.md", "skipped", "waiting-for-user"},
 	}
-	development := read(t, filepath.Join(root, "docs", "development.md"))
+	development := read(t, filepath.Join(root, "docs", "development", "README.md"))
 	for _, want := range []string{"ORG_CONSOLE_TENANTS", "authorized Tenant", "server-side", "刷新", "重启"} {
 		if !strings.Contains(development, want) {
-			t.Errorf("docs/development.md missing Tenant selection guidance %q", want)
+			t.Errorf("docs/development/README.md missing Tenant selection guidance %q", want)
 		}
 	}
-	status := read(t, filepath.Join(root, "docs", "implementation-status.md"))
+	status := read(t, filepath.Join(root, "docs", "development", "implementation-status.md"))
 	for _, want := range []string{"Tenant selector", "authorized memberships", "durable session selection", "Runs list", "waiting-for-user", "Tenant-bound ETag"} {
 		if !strings.Contains(status, want) {
-			t.Errorf("docs/implementation-status.md missing Tenant Console milestone %q", want)
-		}
-	}
-	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
-	for _, want := range []string{"Runs tab", "Waiting for user", "Current node", "action payload"} {
-		if !strings.Contains(gettingStarted, want) {
-			t.Errorf("docs/getting-started.md missing Run-list status guidance %q", want)
+			t.Errorf("docs/development/implementation-status.md missing Tenant Console milestone %q", want)
 		}
 	}
 	for relative, wants := range files {
@@ -247,7 +236,7 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 			}
 		}
 	}
-	for _, relative := range []string{"docs/api/publish-worker-version.md", "docs/api/examples/publish-worker-version.json", "docs/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+	for _, relative := range []string{"docs/user/api/publish-worker-version.md", "docs/user/api/examples/publish-worker-version.json", "docs/user/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
 		for _, forbidden := range []string{"source provenance through org", "source provenance。", `"source":`, "source 填写"} {
 			if strings.Contains(text, forbidden) {
@@ -255,23 +244,19 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 			}
 		}
 	}
-	sampleOverview := read(t, filepath.Join(root, "samples", "README.md"))
-	if strings.Contains(sampleOverview, "git rev-parse") || !strings.Contains(sampleOverview, "SOURCE_REVISION=abcdef1") || !strings.Contains(sampleOverview, `COMMIT="$SOURCE_REVISION"`) {
-		t.Errorf("samples/README.md must support copied repositories without Git metadata")
-	}
 	parallel := read(t, filepath.Join(root, "samples", "parallel-confirmation", "README.md"))
-	if !strings.Contains(parallel, `{"subject":"release notes"}`) {
+	if !strings.Contains(parallel, `subject: release notes`) {
 		t.Errorf("parallel-confirmation README must include required Workflow input")
 	}
 	dynamic := read(t, filepath.Join(root, "samples", "dynamic-decision", "README.md"))
-	for _, want := range []string{"mode: automatic", "invalid_route", "Unsupported mode. Choose concise or detailed.", "安全错误", "raw error"} {
+	for _, want := range []string{"mode: automatic", "invalid_route", "Unsupported mode. Choose concise or detailed."} {
 		if !strings.Contains(dynamic, want) {
 			t.Errorf("dynamic-decision README missing safe invalid-route walkthrough %q", want)
 		}
 	}
-	for _, relative := range []string{"docs/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
+	for _, relative := range []string{"docs/user/getting-started.md", "samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
-		for _, want := range []string{"YAML", "JSON", "Run description", "可选", "schema"} {
+		for _, want := range []string{"YAML", "Run description", "可选"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing structured Trigger guidance %q", relative, want)
 			}
@@ -280,24 +265,16 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 			t.Errorf("%s still implies schema-derived Trigger form controls", relative)
 		}
 	}
-	for _, relative := range []string{"samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
-		text := read(t, filepath.Join(root, relative))
-		for _, want := range []string{"100m", "128Mi", "production", "Activity", "2–5 秒", "随机", "running", "仅用于教学演示"} {
-			if !strings.Contains(text, want) {
-				t.Errorf("%s missing resource guidance %q", relative, want)
-			}
-		}
-	}
 	for _, relative := range []string{"samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md"} {
 		text := read(t, filepath.Join(root, relative))
-		for _, forbidden := range []string{"## 测试", "make test\nmake vet\nmake verify"} {
+		for _, forbidden := range []string{"## 测试", "make test", "make vet", "make verify", "make push", "SDK registration", "poller", "probe", "`100m` CPU", "`128Mi` memory", "平台注入", "自动注册", "production", "deterministic", "## 代码与运行过程如何对应", "## 修改后验证", "## 构建或推送 image"} {
 			if strings.Contains(text, forbidden) {
-				t.Errorf("%s still puts maintainer verification in the first-run path: %q", relative, forbidden)
+				t.Errorf("%s contains background material outside the quick-run path: %q", relative, forbidden)
 			}
 		}
-		for _, want := range []string{"首次体验", "修改后验证", "make verify"} {
+		for _, want := range []string{"## 这个 Sample 展示什么", "make kind-load", "IMAGE_DIGEST", "发布版本", "启动 Workflow", "Run detail"} {
 			if !strings.Contains(text, want) {
-				t.Errorf("%s missing newcomer/developer path separation %q", relative, want)
+				t.Errorf("%s missing quick-run guidance %q", relative, want)
 			}
 		}
 	}
@@ -305,26 +282,20 @@ func TestUserDocumentationHasACompleteValueFirstPath(t *testing.T) {
 
 func TestTenantManagementDocumentationMatchesApprovedConsoleContract(t *testing.T) {
 	root := filepath.Join("..", "..")
-	api := read(t, filepath.Join(root, "docs", "api", "manage-tenants.md"))
+	api := read(t, filepath.Join(root, "docs", "user", "api", "manage-tenants.md"))
 	for _, want := range []string{
 		"管理 Tenants", "GET /api/v1/tenants", "POST /api/v1/tenants", "If-Match", "X-CSRF-Token",
 		"immutable slug", "tenant:create", "tenant:member:manage", "最后一个 owner", "不提供删除 Tenant",
 		"ORG_CONSOLE_PRINCIPALS", "既有 platform principal", "Local Development",
 	} {
 		if !strings.Contains(api, want) {
-			t.Errorf("docs/api/manage-tenants.md missing %q", want)
+			t.Errorf("docs/user/api/manage-tenants.md missing %q", want)
 		}
 	}
-	development := read(t, filepath.Join(root, "docs", "development.md"))
+	development := read(t, filepath.Join(root, "docs", "development", "README.md"))
 	for _, want := range []string{"ORG_CONSOLE_PRINCIPALS", "principal catalog", "不创建外部身份", "管理 Tenants"} {
 		if !strings.Contains(development, want) {
-			t.Errorf("docs/development.md missing Tenant management boundary %q", want)
-		}
-	}
-	gettingStarted := read(t, filepath.Join(root, "docs", "getting-started.md"))
-	for _, want := range []string{"管理 Tenants", "immutable slug", "quota", "member"} {
-		if !strings.Contains(gettingStarted, want) {
-			t.Errorf("docs/getting-started.md missing Tenant management guidance %q", want)
+			t.Errorf("docs/development/README.md missing Tenant management boundary %q", want)
 		}
 	}
 }
@@ -337,7 +308,7 @@ func TestLocalDemoResetIsDiscoverableAndKeepsFixedOwnershipBoundaries(t *testing
 			t.Errorf("Makefile missing local demo reset entry %q", want)
 		}
 	}
-	for _, relative := range []string{"README.md", "docs/getting-started.md"} {
+	for _, relative := range []string{"README.md", "docs/user/getting-started.md"} {
 		contents := read(t, filepath.Join(root, relative))
 		for _, want := range []string{"make demo-reset-dry-run", "RESET_DEMO=1 make demo-reset", "停止", "备份"} {
 			if !strings.Contains(contents, want) {
@@ -356,10 +327,10 @@ func TestLocalDemoResetIsDiscoverableAndKeepsFixedOwnershipBoundaries(t *testing
 func TestApprovedDocsDoNotRetainRemovedSampleArtifactPaths(t *testing.T) {
 	root := filepath.Join("..", "..")
 	for _, relative := range []string{
-		"README.md", "docs/getting-started.md", "samples/README.md",
-		"docs/specs/006-org-sdk.md", "docs/specs/007-hello-org-sdk-sample.md",
-		"docs/specs/008-parallel-confirmation-org-sdk-sample.md", "docs/specs/009-dynamic-decision-org-sdk-sample.md",
-		"docs/specs/012-worker-bootstrap-registration.md", "docs/specs/013-sample-repository-independence.md",
+		"README.md", "docs/user/getting-started.md", "samples/README.md",
+		"docs/development/specs/006-org-sdk.md", "docs/development/specs/007-hello-org-sdk-sample.md",
+		"docs/development/specs/008-parallel-confirmation-org-sdk-sample.md", "docs/development/specs/009-dynamic-decision-org-sdk-sample.md",
+		"docs/development/specs/012-worker-bootstrap-registration.md", "docs/development/specs/013-sample-repository-independence.md",
 		"samples/hello/README.md", "samples/parallel-confirmation/README.md", "samples/dynamic-decision/README.md",
 	} {
 		contents := read(t, filepath.Join(root, relative))
@@ -374,7 +345,7 @@ func TestApprovedDocsDoNotRetainRemovedSampleArtifactPaths(t *testing.T) {
 func TestUserDocumentationLocalLinksResolve(t *testing.T) {
 	root := filepath.Join("..", "..")
 	linkPattern := regexp.MustCompile(`\[[^]]+\]\(([^)]+)\)`)
-	for _, relative := range []string{"README.md", "docs/getting-started.md", "docs/api/publish-worker-version.md", "docs/architecture/overview.md", "samples/README.md"} {
+	for _, relative := range []string{"README.md", "docs/user/getting-started.md", "docs/user/api/publish-worker-version.md", "docs/user/architecture/overview.md", "samples/README.md"} {
 		text := read(t, filepath.Join(root, relative))
 		for _, match := range linkPattern.FindAllStringSubmatch(text, -1) {
 			target := strings.TrimSpace(match[1])

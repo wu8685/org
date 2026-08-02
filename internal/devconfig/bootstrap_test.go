@@ -11,7 +11,7 @@ func TestKindAndTemporalBootstrapFilesMatchRuntimeDefaults(t *testing.T) {
 	root := filepath.Join("..", "..")
 	kindConfig := read(t, filepath.Join(root, "deploy", "dev", "kind.yaml"))
 	makefile := read(t, filepath.Join(root, "Makefile"))
-	guide := read(t, filepath.Join(root, "docs", "development.md"))
+	guide := read(t, filepath.Join(root, "docs", "development", "README.md"))
 	preflight := read(t, filepath.Join(root, "scripts", "e2e-preflight.sh"))
 	cleanup := read(t, filepath.Join(root, "scripts", "e2e-clean.sh"))
 	for _, want := range []string{"kind: Cluster", "kind.x-k8s.io/v1alpha4"} {

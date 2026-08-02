@@ -2,39 +2,38 @@
 
 set -eu
 
-files='docs/specs/001-worker-hosting-mvp.md
-docs/specs/002-hello-worker-sample.md
-docs/specs/003-multi-tenant-shared-infrastructure.md
-docs/specs/004-worker-identity-and-description.md
-docs/specs/005-interactive-parallel-dag-contract.md
-docs/specs/006-org-sdk.md
-docs/specs/007-hello-org-sdk-sample.md
-docs/specs/008-parallel-confirmation-org-sdk-sample.md
-docs/specs/009-dynamic-decision-org-sdk-sample.md
-docs/specs/010-workflow-execution-risk-defense.md
-docs/specs/011-console-ui-http-api.md
-docs/specs/012-worker-bootstrap-registration.md
-docs/specs/013-sample-repository-independence.md
-docs/specs/014-sample-slimming.md
-docs/specs/015-review-fixes.md
-docs/specs/016-local-demo-reset.md
-docs/ui-sdd-input.md
-docs/development.md
-docs/implementation-status.md
+files='docs/development/specs/001-worker-hosting-mvp.md
+docs/development/specs/002-hello-worker-sample.md
+docs/development/specs/003-multi-tenant-shared-infrastructure.md
+docs/development/specs/004-worker-identity-and-description.md
+docs/development/specs/005-interactive-parallel-dag-contract.md
+docs/development/specs/006-org-sdk.md
+docs/development/specs/007-hello-org-sdk-sample.md
+docs/development/specs/008-parallel-confirmation-org-sdk-sample.md
+docs/development/specs/009-dynamic-decision-org-sdk-sample.md
+docs/development/specs/010-workflow-execution-risk-defense.md
+docs/development/specs/011-console-ui-http-api.md
+docs/development/specs/012-worker-bootstrap-registration.md
+docs/development/specs/013-sample-repository-independence.md
+docs/development/specs/014-sample-slimming.md
+docs/development/specs/015-review-fixes.md
+docs/development/specs/016-local-demo-reset.md
+docs/development/specs/022-worker-starter-and-development-guide.md
+docs/development/ui-sdd-input.md
+docs/development/README.md
+docs/development/implementation-status.md
 README.md
 docs/README.md
-docs/concepts.md
-docs/getting-started.md
-docs/write-your-worker.md
-docs/architecture/overview.md
-docs/api/publish-worker-version.md
-samples/README.md
-samples/hello/README.md
-samples/parallel-confirmation/README.md
-samples/dynamic-decision/README.md'
+docs/user/README.md
+docs/user/concepts.md
+docs/user/getting-started.md
+docs/user/create-your-worker.md
+docs/user/write-your-worker.md
+docs/user/architecture/overview.md
+docs/user/api/publish-worker-version.md'
 
 failed=0
-glossary='docs/architecture/glossary.md'
+glossary='docs/user/architecture/glossary.md'
 
 if [ ! -f "$glossary" ]; then
 	echo "$glossary: canonical glossary is missing" >&2

@@ -83,7 +83,7 @@ Tenant
 | Workflow | Agent 编写并由 Worker 暴露的流程 | `ReleaseApprovalWorkflow` |
 | Run | Workflow 的一次独立执行 | 某次发布审批 |
 
-更完整的生命周期说明见 [核心概念](docs/concepts.md)。
+更完整的生命周期说明见 [核心概念](docs/user/concepts.md)。
 
 ## 先跑通，再让 Agent 改
 
@@ -93,7 +93,7 @@ Tenant
 2. [Parallel confirmation](samples/parallel-confirmation/README.md)：人工确认、恢复和并行分支。
 3. [Dynamic decision](samples/dynamic-decision/README.md)：根据 Activity result 选择 runtime path。
 
-第一次使用建议先跟随 [本地快速上手](docs/getting-started.md) 跑通 Hello。确认发布、注册和 Run 路径都正常后，再让 Agent 以 Sample 为参照改成自己的流程。
+第一次使用建议先跟随 [本地快速上手](docs/user/getting-started.md) 跑通 Hello。确认发布、注册和 Run 路径都正常后，再让 Agent 以 Sample 为参照改成自己的流程。
 
 完整阅读路径见 [文档首页](docs/README.md)，三个 Sample 的差异见 [Sample 学习路径](samples/README.md)。
 
@@ -106,7 +106,7 @@ make demo-reset-dry-run
 RESET_DEMO=1 make demo-reset
 ```
 
-reset 会把本仓库的 control-plane state 与 Temporal development database 移入 `.org/reset-backups/` 备份，并清理固定 `kind-org` / `org-workers` 中带 org 标记的 demo workload。它保留 kind cluster、镜像、E2E 资源及其他 platform Kubernetes Namespace；恢复方式和完整检查点见 [本地快速上手](docs/getting-started.md#重置本地-demo)。
+reset 会把本仓库的 control-plane state 与 Temporal development database 移入 `.org/reset-backups/` 备份，并清理固定 `kind-org` / `org-workers` 中带 org 标记的 demo workload。它保留 kind cluster、镜像、E2E 资源及其他 platform Kubernetes Namespace；恢复方式和完整检查点见 [本地快速上手](docs/user/getting-started.md#重置本地-demo)。
 
 ## 使用边界
 
@@ -118,11 +118,11 @@ reset 会把本仓库的 control-plane state 与 Temporal development database �
 ## 文档入口
 
 - [文档首页：按目标选择阅读路径](docs/README.md)
-- [核心概念：对象、发布和运行生命周期](docs/concepts.md)
-- [本地快速上手：完成第一个 Run](docs/getting-started.md)
+- [核心概念：对象、发布和运行生命周期](docs/user/concepts.md)
+- [本地快速上手：完成第一个 Run](docs/user/getting-started.md)
 - [Sample 学习路径：从顺序执行到动态分支](samples/README.md)
-- [发布 WorkerVersion：Console/API 字段与约束](docs/api/publish-worker-version.md)
-- [架构概览：系统边界与可信来源](docs/architecture/overview.md)
-- [本地开发与 E2E：维护 org 本身](docs/development.md)
+- [发布 WorkerVersion：Console/API 字段与约束](docs/user/api/publish-worker-version.md)
+- [架构概览：系统边界与可信来源](docs/user/architecture/overview.md)
+- [本地开发与 E2E：维护 org 本身](docs/development/README.md)
 
-> 产品术语遵循 [org glossary](docs/architecture/glossary.md)：用户隔离边界统一称 Tenant。
+> 产品术语遵循 [org glossary](docs/user/architecture/glossary.md)：用户隔离边界统一称 Tenant。
