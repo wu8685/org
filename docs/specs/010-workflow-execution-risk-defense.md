@@ -4,11 +4,11 @@
 
 ## 状态
 
-**Draft — awaiting explicit user approval. No implementation authorization.**
+**Deferred — not in the current roadmap. Revisit only after an explicit user request. No implementation authorization.**
 
 本文件只定义当前架构下的威胁模型、信任边界、风险接受标准、分层防御责任与验收。它不授权修改 Org SDK、control plane、Temporal/Kubernetes adapter、Samples、E2E、UI 或 HTTP handler，也不授权 commit/push。
 
-本文扩展已批准的 `003-multi-tenant-shared-infrastructure.md`、`004-worker-identity-and-description.md` 与 `006-org-sdk.md`。现有 SDK 与三个 Samples 的实施顺序不因本 Draft 改变。本文获批后，新增防御仍须按独立纵向切片执行 SDD/TDD；不得把 Draft 条目当作已经存在的安全能力。
+本文扩展已批准的 `003-multi-tenant-shared-infrastructure.md`、`004-worker-identity-and-description.md` 与 `006-org-sdk.md`。现有 SDK 与三个 Samples 的实施顺序不因本 Draft 改变。本专题当前不纳入开发计划；只有用户重新提出讨论并明确批准后，才可按独立纵向切片执行 SDD/TDD。不得把本文条目当作已经存在的安全能力。
 
 ## 安全目标与明确非目标
 
