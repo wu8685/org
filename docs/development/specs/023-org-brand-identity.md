@@ -11,16 +11,17 @@
 
 ## 权威资产
 
-仓库保存以下 4 个原始 SVG，文件内容来自 `org-logo-v2-assets.zip`，不得通过截图重绘或栅格化：
+仓库保存以下 5 个原始 SVG，不得通过截图重绘或栅格化：
 
 | 文件 | 用途 |
 |---|---|
 | `org-logo-v2.svg` | 浅色产品界面的彩色横向组合标志 |
 | `org-logo-mark-v2.svg` | 浅色紧凑界面的彩色图形标志 |
-| `org-logo-mono-v2.svg` | GitHub README 等文档入口 |
+| `org-logo-mono-v2.svg` | 需要透明背景的单色场景 |
 | `org-logo-favicon-v2.svg` | 浏览器 favicon；自带深色圆角容器 |
+| `org-logo-readme-v2.svg` | GitHub README；内置不透明白色背景，在 light / dark theme 下保持可见 |
 
-资产在仓库中只保留一份权威副本。Go binary 从该目录 embed 并通过 Console 的 `/assets/` 路由提供，不在 UI 目录复制第二份。
+资产在仓库中只保留一份权威副本。Console 使用的 4 个资产由 Go binary embed 并通过 `/assets/` 路由提供；README 专用资产由 GitHub Markdown 直接引用，不在 UI 目录复制第二份。
 
 ## Console
 
@@ -39,8 +40,8 @@
 
 ## 文档
 
-- 根 `README.md` 顶部使用单色横标，视觉优先级低于项目价值说明，不增加品牌口号或技术选型叙事。
-- `docs/README.md` 作为文档入口使用较小的单色横标；子文档不逐页重复 Logo，避免阅读噪音。
+- 根 `README.md` 顶部使用带不透明白色背景的 README 专用横标，视觉优先级低于项目价值说明，不增加品牌口号或技术选型叙事。
+- `docs/README.md` 作为文档入口使用较小的 README 专用横标；子文档不逐页重复 Logo，避免阅读噪音。
 - Markdown 中使用仓库相对路径和有意义的 alt text；不引用 `~/Downloads`、绝对本地路径或外部 CDN。
 
 ## 静态资源与安全
@@ -54,5 +55,5 @@
 1. Console shell 包含 favicon、宽侧栏横标和紧凑侧栏图形标，均有正确语义。
 2. 4 个 SVG 都可从 `/assets/{filename}` 读取，Content-Type 为 `image/svg+xml`，未知 SVG 仍为 404。
 3. desktop、紧凑侧栏和 mobile 三个断点下，Logo 不变形、不遮挡导航，mobile 不增加新的底栏项目。
-4. 根 README 与文档首页能在 GitHub Markdown 中显示单色标志，且不依赖本地文件。
+4. 根 README 与文档首页能在 GitHub light / dark theme 中显示完整标志，且不依赖本地文件。
 5. `go test ./internal/console`、文档链接测试与项目格式检查通过。
