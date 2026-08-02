@@ -1,4 +1,6 @@
-<img src="assets/brand/org-logo-readme-v2.svg" alt="org" width="145">
+<p align="center">
+  <img src="assets/brand/org-logo-readme-v2.svg" alt="org" width="280">
+</p>
 
 # org
 

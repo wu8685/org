@@ -23,12 +23,12 @@ func TestDocumentationUsesRepositoryBrandAssets(t *testing.T) {
 	}
 
 	readme := read(t, filepath.Join(root, "README.md"))
-	if !strings.Contains(readme, `assets/brand/org-logo-readme-v2.svg`) || !strings.Contains(readme, `alt="org"`) {
-		t.Error("README.md must lead with the opaque-background org logo")
+	if !strings.Contains(readme, `<p align="center">`) || !strings.Contains(readme, `<img src="assets/brand/org-logo-readme-v2.svg" alt="org" width="280">`) {
+		t.Error("README.md must center the opaque-background org logo at its prominent display size")
 	}
 	docs := read(t, filepath.Join(root, "docs", "README.md"))
-	if !strings.Contains(docs, `../assets/brand/org-logo-readme-v2.svg`) || !strings.Contains(docs, `alt="org"`) {
-		t.Error("docs/README.md must use the opaque-background org logo")
+	if !strings.Contains(docs, `<p align="center">`) || !strings.Contains(docs, `<img src="../assets/brand/org-logo-readme-v2.svg" alt="org" width="220">`) {
+		t.Error("docs/README.md must center the opaque-background org logo at its document-index size")
 	}
 	readmeLogo := read(t, filepath.Join(root, "assets", "brand", "org-logo-readme-v2.svg"))
 	if !strings.Contains(readmeLogo, `<rect width="232" height="72" fill="#ffffff"/>`) {

@@ -40,8 +40,8 @@
 
 ## 文档
 
-- 根 `README.md` 顶部使用带不透明白色背景的 README 专用横标，视觉优先级低于项目价值说明，不增加品牌口号或技术选型叙事。
-- `docs/README.md` 作为文档入口使用较小的 README 专用横标；子文档不逐页重复 Logo，避免阅读噪音。
+- 根 `README.md` 顶部使用带不透明白色背景的 README 专用横标，以 `280px` 宽度居中展示；视觉优先级低于项目价值说明，不增加品牌口号或技术选型叙事。
+- `docs/README.md` 作为文档入口，以 `220px` 宽度居中展示同一 README 专用横标；子文档不逐页重复 Logo，避免阅读噪音。
 - Markdown 中使用仓库相对路径和有意义的 alt text；不引用 `~/Downloads`、绝对本地路径或外部 CDN。
 
 ## 静态资源与安全
@@ -55,5 +55,5 @@
 1. Console shell 包含 favicon、宽侧栏横标和紧凑侧栏图形标，均有正确语义。
 2. 4 个 SVG 都可从 `/assets/{filename}` 读取，Content-Type 为 `image/svg+xml`，未知 SVG 仍为 404。
 3. desktop、紧凑侧栏和 mobile 三个断点下，Logo 不变形、不遮挡导航，mobile 不增加新的底栏项目。
-4. 根 README 与文档首页能在 GitHub light / dark theme 中显示完整标志，且不依赖本地文件。
+4. 根 README 与文档首页能在 GitHub light / dark theme 中居中显示完整标志，且不依赖本地文件。
 5. `go test ./internal/console`、文档链接测试与项目格式检查通过。
