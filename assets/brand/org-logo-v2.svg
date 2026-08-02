@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 72" role="img" aria-labelledby="title desc">
+  <title id="title">org 第二版标志</title>
+  <desc id="desc">开放圆环、向外执行的蓝色路径与几何小写 org 字标。</desc>
+  <g transform="translate(4 4)">
+    <path d="M51 17A24 24 0 1 0 54 40" fill="none" stroke="#111111" stroke-width="8" stroke-linecap="square"/>
+    <path d="M29 37 56 10" fill="none" stroke="#2f6feb" stroke-width="8" stroke-linecap="square"/>
+    <rect x="25" y="33" width="8" height="8" rx="2" fill="#2f6feb"/><rect x="52" y="6" width="8" height="8" rx="2" fill="#2f6feb"/>
+  </g>
+  <g fill="none" stroke="#111111" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="86" y="22" width="30" height="30" rx="15"/>
+    <path d="M130 52V24m0 9c5-8 11-11 18-8"/>
+    <rect x="160" y="22" width="30" height="30" rx="15"/>
+    <path d="M190 24v29c0 10-7 15-16 15h-8"/>
+  </g>
+</svg>

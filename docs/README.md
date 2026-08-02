@@ -1,3 +1,5 @@
+<img src="../assets/brand/org-logo-mono-v2.svg" alt="org" width="116">
+
 # org 文档
 
 文档按读者分为两部分：使用 org 的用户从 `user/` 开始；维护和演进 org 的开发者进入 `development/`。

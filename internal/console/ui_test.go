@@ -49,6 +49,10 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runs/inv-1", nil))
 	body := response.Body.String()
 	for _, want := range []string{
+		`<link rel="icon" href="/assets/org-logo-favicon-v2.svg" type="image/svg+xml">`,
+		`class="brand" href="/" aria-label="org Console 首页"`,
+		`class="brand-logo brand-logo-full" src="/assets/org-logo-v2.svg"`,
+		`class="brand-logo brand-logo-mark" src="/assets/org-logo-mark-v2.svg"`,
 		`data-dag-canvas`, `data-dag-list`, `aria-live="polite"`, `data-action-dialog`,
 		`data-tenant-switch`, `name="tenantSlug"`, `aria-label="切换当前 Tenant"`, `data-tenant-switch-status`, `aria-label="breadcrumb"`, `Tenant stable ID`,
 		`data-contract-readonly`, `data-schema-fields`, `data-worker-dialog`, `data-worker-form`,
@@ -71,6 +75,37 @@ func TestConsoleShellContainsReadonlyContractRuntimeDAGAndAccessibleMobileList(t
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("shell retained fixed/reference-only behavior %q", forbidden)
 		}
+	}
+	if strings.Contains(body, `class="brand-mark"`) {
+		t.Fatal("shell retained the text-only org brand placeholder")
+	}
+}
+
+func TestConsoleServesAllowlistedEmbeddedBrandAssets(t *testing.T) {
+	handler := New(Config{Authenticator: stubAuthenticator{identity: testIdentity()}, ControlPlane: &stubControlPlane{}})
+	for _, name := range []string{
+		"org-logo-v2.svg", "org-logo-mark-v2.svg", "org-logo-mono-v2.svg", "org-logo-favicon-v2.svg",
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/assets/"+name, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET /assets/%s status=%d body=%s", name, response.Code, response.Body.String())
+		}
+		if response.Header().Get("Content-Type") != "image/svg+xml" {
+			t.Errorf("GET /assets/%s Content-Type=%q", name, response.Header().Get("Content-Type"))
+		}
+		if response.Header().Get("Cache-Control") != "public, max-age=300" {
+			t.Errorf("GET /assets/%s Cache-Control=%q", name, response.Header().Get("Cache-Control"))
+		}
+		if !strings.Contains(response.Body.String(), "<svg") {
+			t.Errorf("GET /assets/%s did not return SVG", name)
+		}
+	}
+
+	unknown := httptest.NewRecorder()
+	handler.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/assets/org-logo-unapproved.svg", nil))
+	if unknown.Code != http.StatusNotFound {
+		t.Fatalf("unknown brand asset status=%d body=%s", unknown.Code, unknown.Body.String())
 	}
 }
 
@@ -103,7 +138,7 @@ func TestProgressiveAssetsEncodeDynamicDependenciesGatewayHeadersAndResponsiveLa
 		path  string
 		wants []string
 	}{
-		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".dag-list", ".yaml-view", ".run-status-summary", ".run-failure-panel", ".tenant-card", ".member-actions", "prefers-reduced-motion"}},
+		{"/assets/app.css", []string{"--accent: #2f6feb", "grid-template-columns: 244px", "@media (max-width: 700px)", ".brand-logo-full", ".brand-logo-mark", ".dag-list", ".yaml-view", ".run-status-summary", ".run-failure-panel", ".tenant-card", ".member-actions", "prefers-reduced-motion"}},
 		{"/assets/yaml-renderer.js", []string{"YAML display unavailable", "MAX_DEPTH", "MAX_OUTPUT", "Object.keys(value).sort()", "module.exports", "canonicalJSON", "YAML parse error", "custom tags, anchors, aliases, and merge keys are disabled"}},
 		{"/assets/app.js", []string{"semanticProjection", "dependencies", "runtimeNodeId", "publishOperationKey", `headers: {"Idempotency-Key": publishOperationKey}`, "Idempotency-Key", "If-Match", "delivery-unknown", "visibilitychange", "buildSchemaFields", "inputSchema", "requiredPermission", "yamlView", "navigator.clipboard.writeText", `aria-live`, "payloadCodec.parse", "exampleFromSchema", "triggerError", "/api/v1/session/tenant", "tenantSlug", "tenantSwitchStatus", "当前 Tenant 还没有 WorkerVersion", "当前 Tenant 没有 Ready WorkerVersion", "当前 Tenant 的筛选条件下没有 Run", "lastRunsETag", "semanticStatus", "runStatusSummary", "runFailurePanel", "errorSummary", "Failure code", "Run failed", `role: "alert"`, "Waiting for user", "Cancelled", "renderTenants", "renderTenant", "/api/v1/tenants", "tenantDetailETag", "openTenantDialog", "openMemberDialog", "tenant:member:manage"}},
 	}

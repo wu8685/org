@@ -1,3 +1,5 @@
+<img src="assets/brand/org-logo-mono-v2.svg" alt="org" width="145">
+
 # org
 
 org 是一个用 Go code 定义、并由平台托管运行长期 Workflow 的项目。你使用 Org SDK 编写步骤、并行关系、运行时分支和人工确认；org 负责部署 Worker、管理版本、可靠运行、权限校验和状态展示。

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">org 第二版图形标志</title>
+  <desc id="desc">开放圆环包围执行核心，一条蓝色路径穿出边界并指向右上方。</desc>
+  <path d="M51 17A24 24 0 1 0 54 40" fill="none" stroke="#111111" stroke-width="8" stroke-linecap="square"/>
+  <path d="M29 37 56 10" fill="none" stroke="#2f6feb" stroke-width="8" stroke-linecap="square"/>
+  <rect x="25" y="33" width="8" height="8" rx="2" fill="#2f6feb"/>
+  <rect x="52" y="6" width="8" height="8" rx="2" fill="#2f6feb"/>
+</svg>

@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+
+	orgassets "github.com/wu8685/org/assets"
 )
 
 //go:embed web/*
@@ -67,14 +69,22 @@ func serveAsset(response http.ResponseWriter, request *http.Request) bool {
 		return false
 	}
 	name := strings.TrimPrefix(request.URL.Path, "/assets/")
-	if name != "app.css" && name != "yaml-renderer.js" && name != "app.js" {
+	brandAsset := name == "org-logo-v2.svg" || name == "org-logo-mark-v2.svg" || name == "org-logo-mono-v2.svg" || name == "org-logo-favicon-v2.svg"
+	var contents []byte
+	var err error
+	if brandAsset {
+		contents, err = orgassets.ReadBrand(name)
+	} else if name == "app.css" || name == "yaml-renderer.js" || name == "app.js" {
+		contents, err = fs.ReadFile(webFiles, "web/"+name)
+	} else {
 		return false
 	}
-	contents, err := fs.ReadFile(webFiles, "web/"+name)
 	if err != nil {
 		return false
 	}
-	if strings.HasSuffix(name, ".css") {
+	if brandAsset {
+		response.Header().Set("Content-Type", "image/svg+xml")
+	} else if strings.HasSuffix(name, ".css") {
 		response.Header().Set("Content-Type", "text/css; charset=utf-8")
 	} else {
 		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
