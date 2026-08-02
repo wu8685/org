@@ -2,205 +2,329 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
 )
 
-func TestBootstrapManifestInjectsCredentialAsReadonlyFileAndNoPublicIdentity(t *testing.T) {
+func TestBuildResourcesAreTypedDigestPinnedAndConstrained(t *testing.T) {
 	d := testDeployment()
-	manifest, err := RenderBootstrapManifest(d, Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, service.BootstrapDeployment{Endpoint: "https://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "opaque-secret", Generation: "generation-random", ExpiresAt: time.Now().Add(time.Minute)})
+	d.Runtime.ServiceAccount = "forged-client-service-account"
+	resources, err := BuildResources(d, Config{Namespace: "org-platform", WorkerTemporalAddress: "temporal.org.local:7233", TemporalNamespace: "platform", NetworkPolicyEnabled: true}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"kind: Secret", "opaque-secret", "ORG_BOOTSTRAP_ENDPOINT", "/var/run/org-bootstrap/credential", "readOnly: true", "audience: org-worker-bootstrap", "ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE", "ORG_BOOTSTRAP_POD_UID", "fieldPath: metadata.uid", "fsGroup: 65532", "defaultMode: 0440", "org.wu8685.dev/bootstrap-generation: generation-random"} {
-		if !strings.Contains(manifest, want) {
-			t.Fatalf("bootstrap manifest missing %q\n%s", want, manifest)
-		}
+	if resources.ServiceAccount.Name != d.KubernetesServiceAccount || resources.Deployment.Name != d.KubernetesDeployment || resources.NetworkPolicy == nil || resources.Secret != nil {
+		t.Fatalf("unexpected resources: %#v", resources)
 	}
-	if strings.Contains(manifest, "ORG_TENANT") || strings.Contains(manifest, "ORG_WORKER_NAME") || strings.Contains(manifest, "ORG_WORKER_VERSION") {
-		t.Fatalf("bootstrap target identity was injected into Worker configuration\n%s", manifest)
+	if resources.ServiceAccount.AutomountServiceAccountToken == nil || *resources.ServiceAccount.AutomountServiceAccountToken {
+		t.Fatal("Worker ServiceAccount token is automounted")
+	}
+	pod := resources.Deployment.Spec.Template.Spec
+	if pod.ServiceAccountName != d.KubernetesServiceAccount || pod.ServiceAccountName == d.Runtime.ServiceAccount {
+		t.Fatalf("service account = %q", pod.ServiceAccountName)
+	}
+	container := pod.Containers[0]
+	if container.Image != d.Image || container.Resources.Requests.Cpu().String() != "250m" || container.Resources.Limits.Memory().String() != "256Mi" {
+		t.Fatalf("container identity/resources = %#v", container)
+	}
+	if container.SecurityContext == nil || container.SecurityContext.AllowPrivilegeEscalation == nil || *container.SecurityContext.AllowPrivilegeEscalation || container.SecurityContext.ReadOnlyRootFilesystem == nil || !*container.SecurityContext.ReadOnlyRootFilesystem {
+		t.Fatalf("unsafe container security context: %#v", container.SecurityContext)
+	}
+	if pod.SecurityContext == nil || pod.SecurityContext.RunAsNonRoot == nil || !*pod.SecurityContext.RunAsNonRoot || pod.SecurityContext.SeccompProfile == nil || pod.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("unsafe Pod security context: %#v", pod.SecurityContext)
+	}
+	if got := resources.Deployment.Labels[tenantHashLabel]; got != d.TenantHash {
+		t.Fatalf("tenant hash label = %q", got)
 	}
 }
 
-func TestManifestIsDigestPinnedConstrainedAndUsesPodReachableTemporalAddress(t *testing.T) {
-	d := testDeployment()
-	manifest, err := RenderManifest(d, Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"})
+func TestBuildBootstrapResourcesInjectCredentialAsReadonlyFile(t *testing.T) {
+	bootstrap := service.BootstrapDeployment{Endpoint: "https://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "opaque-secret", Generation: "generation-random", ExpiresAt: time.Now().Add(time.Minute)}
+	resources, err := BuildResources(testDeployment(), Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, &bootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"kind: ServiceAccount", "kind: Deployment", "runAsNonRoot: true", "allowPrivilegeEscalation: false", "readOnlyRootFilesystem: true", "automountServiceAccountToken: false", "host.docker.internal:7233", d.TaskQueue, d.Image} {
-		if !strings.Contains(manifest, want) {
-			t.Errorf("manifest missing %q\n%s", want, manifest)
+	if resources.Secret == nil || string(resources.Secret.Data["credential"]) != bootstrap.Credential {
+		t.Fatal("bootstrap credential was not stored in the typed Secret")
+	}
+	pod := resources.Deployment.Spec.Template
+	if pod.Labels[bootstrapGenerationLabel] != bootstrap.Generation {
+		t.Fatalf("bootstrap generation = %q", pod.Labels[bootstrapGenerationLabel])
+	}
+	container := pod.Spec.Containers[0]
+	for _, name := range []string{"ORG_BOOTSTRAP_ENDPOINT", "ORG_BOOTSTRAP_TOKEN_FILE", "ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE", "ORG_BOOTSTRAP_POD_UID", "ORG_BOOTSTRAP_EXPIRES_AT"} {
+		if !hasEnv(container.Env, name) {
+			t.Errorf("missing bootstrap env %s", name)
 		}
 	}
-	if strings.Contains(manifest, "value: 127.0.0.1:7233") {
-		t.Fatal("worker manifest hard-codes host localhost")
+	if hasEnv(container.Env, "ORG_TENANT") || hasEnv(container.Env, "ORG_WORKER_NAME") || hasEnv(container.Env, "ORG_WORKER_VERSION") {
+		t.Fatal("public target identity was injected into the Worker")
+	}
+	if !hasReadonlyMount(container.VolumeMounts, "bootstrap") || !hasReadonlyMount(container.VolumeMounts, "workload-identity") {
+		t.Fatalf("bootstrap mounts are not readonly: %#v", container.VolumeMounts)
 	}
 }
 
-func TestKubectlUsesConfiguredContextForApplyAndReadiness(t *testing.T) {
-	runner := &fakeRunner{}
-	client := New(Config{Namespace: "org-workers", Context: "kind-org", Kubeconfig: "/tmp/test-kubeconfig", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
+func TestApplyCreatesNamespaceAndUsesServerSideApply(t *testing.T) {
 	d := testDeployment()
-	if err := client.Apply(context.Background(), d); err != nil {
+	owned := map[string]string{managedByLabel: managedByValue}
+	api := fake.NewClientset(
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: d.KubernetesServiceAccount, Namespace: "org-workers", Labels: owned}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: bootstrapSecretName(d), Namespace: "org-workers", Labels: owned}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: d.KubernetesDeployment, Namespace: "org-workers", Labels: owned}},
+	)
+	var patches []ktesting.PatchAction
+	api.PrependReactor("patch", "*", func(action ktesting.Action) (bool, runtime.Object, error) {
+		patch := action.(ktesting.PatchAction)
+		patches = append(patches, patch)
+		var object runtime.Object
+		switch action.GetResource().Resource {
+		case "serviceaccounts":
+			object = &corev1.ServiceAccount{}
+		case "secrets":
+			object = &corev1.Secret{}
+		case "deployments":
+			object = &appsv1.Deployment{}
+		default:
+			t.Fatalf("unexpected patch resource: %s", action.GetResource().Resource)
+		}
+		return true, object, nil
+	})
+	client := New(Config{Namespace: "org-workers", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, api)
+	if err := client.ApplyBootstrap(context.Background(), d, service.BootstrapDeployment{Endpoint: "http://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "secret", Generation: "generation-1", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.WaitReady(context.Background(), d); err != nil {
-		t.Fatal(err)
+	namespace, err := api.CoreV1().Namespaces().Get(context.Background(), "org-workers", metav1.GetOptions{})
+	if err != nil || namespace.Labels[managedByLabel] != managedByValue {
+		t.Fatalf("created Namespace = %#v, error=%v", namespace, err)
 	}
-	joined := strings.Join(runner.calls, "\n")
-	for _, want := range []string{"--context kind-org", "--kubeconfig /tmp/test-kubeconfig", "apply -f -", "rollout status deployment/"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("kubectl calls missing %q: %s", want, joined)
+	if len(patches) != 3 {
+		t.Fatalf("patches = %d, want ServiceAccount, Secret, Deployment", len(patches))
+	}
+	for _, patch := range patches {
+		if patch.GetPatchType() != types.ApplyPatchType {
+			t.Fatalf("patch type = %q", patch.GetPatchType())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(patch.GetPatch(), &body); err != nil || body["apiVersion"] == nil || body["kind"] == nil {
+			t.Fatalf("invalid apply body %s: %v", patch.GetPatch(), err)
+		}
+		options := patch.(ktesting.PatchActionImpl).GetPatchOptions()
+		if options.FieldManager != fieldManager || options.Force == nil || !*options.Force {
+			t.Fatalf("patch options = %#v", options)
 		}
 	}
 }
 
-func TestApplyCreatesMissingPlatformNamespaceBeforeNamespaceScopedResources(t *testing.T) {
-	runner := &scriptedRunner{results: []runnerResult{{err: errors.New(`Error from server (NotFound): namespaces "org-workers" not found`)}, {}, {}}}
-	client := New(Config{Namespace: "org-workers", Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
-	if err := client.ApplyBootstrap(context.Background(), testDeployment(), service.BootstrapDeployment{Endpoint: "http://host.docker.internal:8090/internal/v1/bootstrap/register", Credential: "secret", Generation: "generation-1", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("calls=%v", runner.calls)
-	}
-	for index, want := range []string{"get namespace org-workers", "create -f -", "apply -f -"} {
-		if !strings.Contains(runner.calls[index], want) {
-			t.Fatalf("call %d missing %q: %s", index, want, runner.calls[index])
-		}
-	}
-	if !strings.Contains(runner.calls[1], "kind: Namespace") || !strings.Contains(runner.calls[1], "app.kubernetes.io/managed-by: org") {
-		t.Fatalf("created Namespace is not marked as org-created: %s", runner.calls[1])
-	}
-	if strings.Contains(runner.calls[2], "kind: Namespace") {
-		t.Fatalf("workload apply attempted to own Namespace: %s", runner.calls[2])
-	}
-}
-
-func TestApplyPreservesExistingPlatformNamespace(t *testing.T) {
-	runner := &scriptedRunner{results: []runnerResult{{}, {}}}
-	client := New(Config{Namespace: "shared-existing", Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
+func TestApplyCreatesMissingTypedResourcesWithFieldManager(t *testing.T) {
+	api := fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "org-workers"}})
+	client := New(Config{Namespace: "org-workers", WorkerTemporalAddress: "temporal:7233", TemporalNamespace: "default"}, api)
 	if err := client.Apply(context.Background(), testDeployment()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 2 || !strings.Contains(runner.calls[0], "get namespace shared-existing") || !strings.Contains(runner.calls[1], "apply -f -") {
-		t.Fatalf("existing Namespace call sequence=%v", runner.calls)
+	created := 0
+	for _, action := range api.Actions() {
+		if action.GetVerb() != "create" || action.GetResource().Resource == "namespaces" {
+			continue
+		}
+		created++
+		options := action.(ktesting.CreateActionImpl).GetCreateOptions()
+		if options.FieldManager != fieldManager {
+			t.Fatalf("create options = %#v", options)
+		}
 	}
-	if strings.Contains(runner.calls[1], "kind: Namespace") || strings.Contains(strings.Join(runner.calls, "\n"), "create -f -") {
-		t.Fatalf("existing Namespace was mutated or adopted: %v", runner.calls)
+	if created != 2 {
+		t.Fatalf("created resources = %d, want ServiceAccount and Deployment", created)
 	}
 }
 
-func TestApplyDoesNotCreateNamespaceAfterNonNotFoundReadFailure(t *testing.T) {
-	runner := &scriptedRunner{results: []runnerResult{{err: errors.New("forbidden")}}}
-	client := New(Config{Namespace: "org-workers", Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
-	if err := client.Apply(context.Background(), testDeployment()); err == nil || !strings.Contains(err.Error(), "forbidden") {
-		t.Fatalf("error=%v", err)
+func TestApplyDoesNotAdoptConcurrentlyCreatedUnownedResource(t *testing.T) {
+	api := fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "org-workers"}})
+	api.PrependReactor("create", "serviceaccounts", func(action ktesting.Action) (bool, runtime.Object, error) {
+		created := action.(ktesting.CreateAction).GetObject().(*corev1.ServiceAccount).DeepCopy()
+		created.Labels = nil
+		if err := api.Tracker().Create(corev1.SchemeGroupVersion.WithResource("serviceaccounts"), created, created.Namespace); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "serviceaccounts"}, created.Name)
+	})
+	client := New(Config{Namespace: "org-workers", WorkerTemporalAddress: "temporal:7233", TemporalNamespace: "default"}, api)
+	err := client.Apply(context.Background(), testDeployment())
+	if err == nil || !strings.Contains(err.Error(), "not managed by org") {
+		t.Fatalf("error = %v", err)
 	}
-	if len(runner.calls) != 1 || strings.Contains(runner.calls[0], "create") || strings.Contains(runner.calls[0], "apply") {
-		t.Fatalf("unsafe calls after namespace read failure: %v", runner.calls)
+	for _, action := range api.Actions() {
+		if action.GetResource().Resource == "deployments" && (action.GetVerb() == "create" || action.GetVerb() == "patch") {
+			t.Fatalf("deployment mutation followed ownership race: %#v", action)
+		}
+	}
+}
+
+func TestApplyPreservesExistingNamespaceAndRejectsUnownedWorkload(t *testing.T) {
+	api := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shared-existing"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: testDeployment().KubernetesDeployment, Namespace: "shared-existing"}},
+	)
+	client := New(Config{Namespace: "shared-existing", WorkerTemporalAddress: "temporal:7233", TemporalNamespace: "default"}, api)
+	err := client.Apply(context.Background(), testDeployment())
+	if err == nil || !strings.Contains(err.Error(), "not managed by org") {
+		t.Fatalf("error = %v", err)
+	}
+	namespace, getErr := api.CoreV1().Namespaces().Get(context.Background(), "shared-existing", metav1.GetOptions{})
+	if getErr != nil || len(namespace.Labels) != 0 {
+		t.Fatalf("existing Namespace was adopted: %#v, error=%v", namespace, getErr)
+	}
+}
+
+func TestApplyDoesNotCreateNamespaceAfterForbiddenRead(t *testing.T) {
+	api := fake.NewClientset()
+	api.PrependReactor("get", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, "org-workers", errors.New("denied"))
+	})
+	client := New(Config{Namespace: "org-workers", WorkerTemporalAddress: "temporal:7233", TemporalNamespace: "default"}, api)
+	err := client.Apply(context.Background(), testDeployment())
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("error = %v", err)
+	}
+	for _, action := range api.Actions() {
+		if action.GetVerb() == "create" || action.GetVerb() == "patch" {
+			t.Fatalf("mutation followed forbidden Namespace read: %#v", action)
+		}
 	}
 }
 
 func TestApplyConvergesWhenNamespaceIsCreatedConcurrently(t *testing.T) {
-	runner := &scriptedRunner{results: []runnerResult{
-		{err: errors.New(`Error from server (NotFound): namespaces "org-workers" not found`)},
-		{err: errors.New(`Error from server (AlreadyExists): namespaces "org-workers" already exists`)},
-		{}, {},
-	}}
-	client := New(Config{Namespace: "org-workers", Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
+	api := fake.NewClientset()
+	createCalls := 0
+	api.PrependReactor("create", "namespaces", func(action ktesting.Action) (bool, runtime.Object, error) {
+		createCalls++
+		if createCalls == 1 {
+			created := action.(ktesting.CreateAction).GetObject().(*corev1.Namespace).DeepCopy()
+			if err := api.Tracker().Create(corev1.SchemeGroupVersion.WithResource("namespaces"), created, ""); err != nil {
+				t.Fatal(err)
+			}
+			return true, nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "namespaces"}, created.Name)
+		}
+		return false, nil, nil
+	})
+	api.PrependReactor("patch", "*", successfulPatchReactor)
+	client := New(Config{Namespace: "org-workers", WorkerTemporalAddress: "temporal:7233", TemporalNamespace: "default"}, api)
 	if err := client.Apply(context.Background(), testDeployment()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 4 || !strings.Contains(runner.calls[2], "get namespace org-workers") || !strings.Contains(runner.calls[3], "apply -f -") {
-		t.Fatalf("concurrent Namespace creation did not converge: %v", runner.calls)
-	}
 }
 
-func TestApplyDoesNotTreatAnUnrelatedNotFoundAsNamespaceAbsence(t *testing.T) {
-	runner := &scriptedRunner{results: []runnerResult{{err: errors.New(`Error from server (NotFound): contexts "kind-org" not found`)}}}
-	client := New(Config{Namespace: "org-workers", Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default"}, runner)
-	if err := client.Apply(context.Background(), testDeployment()); err == nil {
-		t.Fatal("unrelated NotFound was treated as a missing platform Kubernetes Namespace")
-	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("unexpected mutation after unrelated NotFound: %v", runner.calls)
-	}
-}
-
-func TestManifestUsesTenantCanonicalNamesLabelsAndNoKubernetesAPIAccess(t *testing.T) {
+func TestWaitReadyUsesDeploymentStatusAndHonorsContext(t *testing.T) {
 	d := testDeployment()
-	d.Runtime.ServiceAccount = "forged-client-service-account"
-	manifest, err := RenderManifest(d, Config{Namespace: "org-platform", WorkerTemporalAddress: "temporal.org.local:7233", TemporalNamespace: "platform"})
-	if err != nil {
+	replicas := int32(1)
+	ready := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: d.KubernetesDeployment, Namespace: "org-workers", UID: "deployment-1", Generation: 2},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 2, UpdatedReplicas: 1, AvailableReplicas: 1, ReadyReplicas: 1},
+	}
+	client := New(Config{Namespace: "org-workers", ReadinessTimeout: time.Second}, fake.NewClientset(ready))
+	if err := client.WaitReady(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"name: " + d.KubernetesDeployment,
-		"serviceAccountName: " + d.KubernetesServiceAccount,
-		"org.wu8685.dev/tenant: " + d.TenantSlug,
-		"org.wu8685.dev/tenant-hash: " + d.TenantHash,
-		"org.wu8685.dev/worker: " + d.WorkerName,
-		"org.wu8685.dev/version: " + d.VersionHash,
-		"requests: {cpu: 250m, memory: 256Mi}",
-		"limits: {cpu: 250m, memory: 256Mi}",
-		"automountServiceAccountToken: false",
-	} {
-		if !strings.Contains(manifest, want) {
-			t.Errorf("manifest missing %q\n%s", want, manifest)
+
+	pending := ready.DeepCopy()
+	pending.Status = appsv1.DeploymentStatus{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := New(Config{Namespace: "org-workers", ReadinessTimeout: time.Second}, fake.NewClientset(pending)).WaitReady(ctx, d)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitReadyRejectsProgressDeadlineExceeded(t *testing.T) {
+	d := testDeployment()
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: d.KubernetesDeployment, Namespace: "org-workers", UID: "deployment-1", Generation: 2},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas, Strategy: appsv1.DeploymentStrategy{RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 0}}}},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 2, Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded"}}},
+	}
+	err := New(Config{Namespace: "org-workers", ReadinessTimeout: time.Second}, fake.NewClientset(deployment)).WaitReady(context.Background(), d)
+	if err == nil || !strings.Contains(err.Error(), "ProgressDeadlineExceeded") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWaitReadyRetriesTransientAPIServerFailure(t *testing.T) {
+	d := testDeployment()
+	replicas := int32(1)
+	ready := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: d.KubernetesDeployment, Namespace: "org-workers", UID: "deployment-1", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, AvailableReplicas: 1},
+	}
+	api := fake.NewClientset(ready)
+	calls := 0
+	api.PrependReactor("get", "deployments", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewServerTimeout(schema.GroupResource{Group: "apps", Resource: "deployments"}, "get", 1)
+		}
+		return false, nil, nil
+	})
+	if err := New(Config{Namespace: "org-workers", ReadinessTimeout: time.Second}, api).WaitReady(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNetworkPolicyStatus(t *testing.T) {
+	if got := NetworkPolicyStatus(Config{NetworkPolicyEnabled: true}); got != "manifest_only_not_enforced" {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func successfulPatchReactor(action ktesting.Action) (bool, runtime.Object, error) {
+	switch action.GetResource().Resource {
+	case "serviceaccounts":
+		return true, &corev1.ServiceAccount{}, nil
+	case "secrets":
+		return true, &corev1.Secret{}, nil
+	case "deployments":
+		return true, &appsv1.Deployment{}, nil
+	default:
+		return false, nil, nil
+	}
+}
+
+func hasEnv(values []corev1.EnvVar, name string) bool {
+	for _, value := range values {
+		if value.Name == name {
+			return true
 		}
 	}
-	if strings.Contains(manifest, "forged-client-service-account") || strings.Contains(manifest, "RoleBinding") || strings.Contains(manifest, "kind: Role\n") {
-		t.Fatalf("manifest granted or accepted Kubernetes API identity\n%s", manifest)
-	}
-	if strings.Contains(manifest, "org.wu8685.dev/scope") || strings.Contains(manifest, "org.wu8685.dev/release") {
-		t.Fatalf("legacy public labels leaked into manifest\n%s", manifest)
-	}
+	return false
 }
 
-func TestOptionalNetworkPolicyReportsManifestOnlyWithoutCNIEnforcement(t *testing.T) {
-	d := testDeployment()
-	cfg := Config{Namespace: "org-platform", WorkerTemporalAddress: "temporal.org.local:7233", TemporalNamespace: "platform", NetworkPolicyEnabled: true}
-	manifest, err := RenderManifest(d, cfg)
-	if err != nil {
-		t.Fatal(err)
+func hasReadonlyMount(values []corev1.VolumeMount, name string) bool {
+	for _, value := range values {
+		if value.Name == name && value.ReadOnly {
+			return true
+		}
 	}
-	if !strings.Contains(manifest, "kind: NetworkPolicy") || NetworkPolicyStatus(cfg) != "manifest_only_not_enforced" {
-		t.Fatalf("NetworkPolicy status/manifest mismatch: status=%q\n%s", NetworkPolicyStatus(cfg), manifest)
-	}
-}
-
-type fakeRunner struct{ calls []string }
-
-func (f *fakeRunner) Run(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
-	f.calls = append(f.calls, name+" "+strings.Join(args, " ")+" stdin="+stdin)
-	return nil, nil
-}
-
-type runnerResult struct {
-	out []byte
-	err error
-}
-
-type scriptedRunner struct {
-	calls   []string
-	results []runnerResult
-}
-
-func (r *scriptedRunner) Run(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
-	r.calls = append(r.calls, name+" "+strings.Join(args, " ")+" stdin="+stdin)
-	if len(r.results) == 0 {
-		return nil, errors.New("unexpected runner call")
-	}
-	result := r.results[0]
-	r.results = r.results[1:]
-	return result.out, result.err
+	return false
 }
 
 func testDeployment() domain.WorkerVersion {

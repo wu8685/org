@@ -1,17 +1,28 @@
 package kube
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
-	"strconv"
-	"strings"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/wu8685/org/internal/domain"
 	"github.com/wu8685/org/internal/service"
+)
+
+const (
+	managedByLabel = "app.kubernetes.io/managed-by"
+	managedByValue = "org"
+	fieldManager   = "org-control-plane"
 )
 
 type Config struct {
@@ -19,240 +30,299 @@ type Config struct {
 	ReadinessTimeout                                                         time.Duration
 	NetworkPolicyEnabled, NetworkPolicyEnforced                              bool
 }
-type Runner interface {
-	Run(context.Context, string, string, ...string) ([]byte, error)
-}
+
 type Client struct {
-	cfg    Config
-	runner Runner
+	cfg Config
+	api kubernetes.Interface
 }
 
-func New(cfg Config, runner Runner) *Client {
-	if runner == nil {
-		runner = ExecRunner{}
-	}
-	return &Client{cfg: cfg, runner: runner}
+func New(cfg Config, api kubernetes.Interface) *Client {
+	return &Client{cfg: cfg, api: api}
 }
 
-func (c *Client) Apply(ctx context.Context, d domain.WorkerVersion) error {
-	manifest, err := RenderManifest(d, c.cfg)
+func (c *Client) Apply(ctx context.Context, deployment domain.WorkerVersion) error {
+	resources, err := BuildResources(deployment, c.cfg, nil)
 	if err != nil {
 		return err
 	}
-	if err := c.ensureNamespace(ctx); err != nil {
-		return err
-	}
-	_, err = c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "apply", "-f", "-")...)
-	return err
+	return c.applyResources(ctx, resources)
 }
 
-func (c *Client) ApplyBootstrap(ctx context.Context, d domain.WorkerVersion, deployment service.BootstrapDeployment) error {
-	manifest, err := RenderBootstrapManifest(d, c.cfg, deployment)
+func (c *Client) ApplyBootstrap(ctx context.Context, deployment domain.WorkerVersion, bootstrap service.BootstrapDeployment) error {
+	resources, err := BuildResources(deployment, c.cfg, &bootstrap)
 	if err != nil {
 		return err
 	}
-	if err := c.ensureNamespace(ctx); err != nil {
-		return err
-	}
-	_, err = c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "apply", "-f", "-")...)
-	return err
+	return c.applyResources(ctx, resources)
 }
 
-func (c *Client) ensureNamespace(ctx context.Context) error {
-	_, err := c.runner.Run(ctx, "", "kubectl", append(c.flags(), "get", "namespace", c.cfg.Namespace)...)
-	if err == nil {
-		return nil
+func (c *Client) applyResources(ctx context.Context, resources Resources) error {
+	if c.api == nil {
+		return errors.New("Kubernetes API client is required")
 	}
-	if !namespaceNotFound(err, c.cfg.Namespace) {
+	if err := c.ensureNamespace(ctx); err != nil {
+		return fmt.Errorf("ensure platform Kubernetes Namespace: %w", err)
+	}
+	if err := c.applyServiceAccount(ctx, resources.ServiceAccount); err != nil {
 		return err
 	}
-	manifest := fmt.Sprintf("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n  labels:\n    app.kubernetes.io/managed-by: org\n", c.cfg.Namespace)
-	if _, createErr := c.runner.Run(ctx, manifest, "kubectl", append(c.flags(), "create", "-f", "-")...); createErr != nil {
-		if !strings.Contains(createErr.Error(), "(AlreadyExists)") {
-			return createErr
+	if resources.Secret != nil {
+		if err := c.applySecret(ctx, resources.Secret); err != nil {
+			return err
 		}
-		_, readErr := c.runner.Run(ctx, "", "kubectl", append(c.flags(), "get", "namespace", c.cfg.Namespace)...)
-		return readErr
+	}
+	if err := c.applyDeployment(ctx, resources.Deployment); err != nil {
+		return err
+	}
+	if resources.NetworkPolicy != nil {
+		if err := c.applyNetworkPolicy(ctx, resources.NetworkPolicy); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func namespaceNotFound(err error, namespace string) bool {
-	return err != nil && strings.Contains(err.Error(), "(NotFound)") && strings.Contains(err.Error(), fmt.Sprintf(`namespaces %q not found`, namespace))
+func (c *Client) ensureNamespace(ctx context.Context) error {
+	_, err := c.api.CoreV1().Namespaces().Get(ctx, c.cfg.Namespace, metav1.GetOptions{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	namespace := &corev1.Namespace{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: c.cfg.Namespace, Labels: map[string]string{managedByLabel: managedByValue}},
+	}
+	if _, err := c.api.CoreV1().Namespaces().Create(ctx, namespace, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+		_, err = c.api.CoreV1().Namespaces().Get(ctx, c.cfg.Namespace, metav1.GetOptions{})
+		return err
+	}
+	return nil
 }
 
-func RenderBootstrapManifest(d domain.WorkerVersion, cfg Config, deployment service.BootstrapDeployment) (string, error) {
-	if strings.TrimSpace(deployment.Endpoint) == "" || strings.TrimSpace(deployment.Credential) == "" || strings.TrimSpace(deployment.Generation) == "" || deployment.ExpiresAt.IsZero() {
-		return "", errors.New("bootstrap endpoint, credential, generation, and expiry are required")
+func (c *Client) applyServiceAccount(ctx context.Context, object *corev1.ServiceAccount) error {
+	client := c.api.CoreV1().ServiceAccounts(object.Namespace)
+	existing, err := client.Get(ctx, object.Name, metav1.GetOptions{})
+	if err == nil {
+		if err := requireOwned(existing.Labels, "ServiceAccount", object.Name); err != nil {
+			return err
+		}
+	} else if apierrors.IsNotFound(err) {
+		if _, err := client.Create(ctx, object, metav1.CreateOptions{FieldManager: fieldManager}); err == nil {
+			return nil
+		} else if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create ServiceAccount %q: %w", object.Name, err)
+		}
+		existing, err = client.Get(ctx, object.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("read concurrently created ServiceAccount %q: %w", object.Name, err)
+		}
+		if err := requireOwned(existing.Labels, "ServiceAccount", object.Name); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("read ServiceAccount %q: %w", object.Name, err)
 	}
-	manifest, err := RenderManifest(d, cfg)
+	body, err := json.Marshal(object)
 	if err != nil {
-		return "", err
+		return err
 	}
-	secretName := bootstrapSecretName(d)
-	secret := fmt.Sprintf("apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app.kubernetes.io/managed-by: org\n    org.wu8685.dev/tenant-hash: %s\n    org.wu8685.dev/worker: %s\n    org.wu8685.dev/version: %s\ntype: Opaque\nstringData:\n  credential: %s\n---\n", secretName, cfg.Namespace, d.TenantHash, d.WorkerName, d.VersionHash, strconv.Quote(deployment.Credential))
-	manifest = secret + manifest
-	podLabelBoundary := fmt.Sprintf("        org.wu8685.dev/version: %s\n    spec:", d.VersionHash)
-	manifest = strings.Replace(manifest, podLabelBoundary, fmt.Sprintf("        org.wu8685.dev/version: %s\n        org.wu8685.dev/bootstrap-generation: %s\n    spec:", d.VersionHash, deployment.Generation), 1)
-	manifest = strings.Replace(manifest, "        volumeMounts:\n        - {name: tmp, mountPath: /tmp}", "        volumeMounts:\n        - {name: bootstrap, mountPath: /var/run/org-bootstrap, readOnly: true}\n        - {name: workload-identity, mountPath: /var/run/org-workload, readOnly: true}\n        - {name: tmp, mountPath: /tmp}", 1)
-	manifest = strings.Replace(manifest, "        env:\n        - {name: TEMPORAL_ADDRESS", fmt.Sprintf("        env:\n        - {name: ORG_BOOTSTRAP_ENDPOINT, value: %s}\n        - {name: ORG_BOOTSTRAP_TOKEN_FILE, value: /var/run/org-bootstrap/credential}\n        - {name: ORG_BOOTSTRAP_WORKLOAD_TOKEN_FILE, value: /var/run/org-workload/token}\n        - name: ORG_BOOTSTRAP_POD_UID\n          valueFrom:\n            fieldRef:\n              fieldPath: metadata.uid\n        - {name: ORG_BOOTSTRAP_EXPIRES_AT, value: %s}\n        - {name: TEMPORAL_ADDRESS", strconv.Quote(deployment.Endpoint), strconv.Quote(deployment.ExpiresAt.UTC().Format(time.RFC3339))), 1)
-	manifest = strings.Replace(manifest, "      volumes:\n      - name: tmp", fmt.Sprintf("      volumes:\n      - name: bootstrap\n        secret:\n          secretName: %s\n          defaultMode: 0440\n      - name: workload-identity\n        projected:\n          defaultMode: 0440\n          sources:\n          - serviceAccountToken:\n              audience: org-worker-bootstrap\n              expirationSeconds: 600\n              path: token\n      - name: tmp", secretName), 1)
-	return manifest, nil
+	force := true
+	_, err = client.Patch(ctx, object.Name, types.ApplyPatchType, body, metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
+	return wrapApply("ServiceAccount", object.Name, err)
 }
 
-func bootstrapSecretName(d domain.WorkerVersion) string {
-	base := d.KubernetesDeployment
-	if len(base) > 53 {
-		base = strings.TrimRight(base[:53], "-")
+func (c *Client) applySecret(ctx context.Context, object *corev1.Secret) error {
+	client := c.api.CoreV1().Secrets(object.Namespace)
+	existing, err := client.Get(ctx, object.Name, metav1.GetOptions{})
+	if err == nil {
+		if err := requireOwned(existing.Labels, "Secret", object.Name); err != nil {
+			return err
+		}
+	} else if apierrors.IsNotFound(err) {
+		if _, err := client.Create(ctx, object, metav1.CreateOptions{FieldManager: fieldManager}); err == nil {
+			return nil
+		} else if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create Secret %q: %w", object.Name, err)
+		}
+		existing, err = client.Get(ctx, object.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("read concurrently created Secret %q: %w", object.Name, err)
+		}
+		if err := requireOwned(existing.Labels, "Secret", object.Name); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("read Secret %q: %w", object.Name, err)
 	}
-	return base + "-bootstrap"
+	body, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	force := true
+	_, err = client.Patch(ctx, object.Name, types.ApplyPatchType, body, metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
+	return wrapApply("Secret", object.Name, err)
 }
 
-func (c *Client) WaitReady(ctx context.Context, d domain.WorkerVersion) error {
+func (c *Client) applyDeployment(ctx context.Context, object *appsv1.Deployment) error {
+	client := c.api.AppsV1().Deployments(object.Namespace)
+	existing, err := client.Get(ctx, object.Name, metav1.GetOptions{})
+	if err == nil {
+		if err := requireOwned(existing.Labels, "Deployment", object.Name); err != nil {
+			return err
+		}
+	} else if apierrors.IsNotFound(err) {
+		if _, err := client.Create(ctx, object, metav1.CreateOptions{FieldManager: fieldManager}); err == nil {
+			return nil
+		} else if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create Deployment %q: %w", object.Name, err)
+		}
+		existing, err = client.Get(ctx, object.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("read concurrently created Deployment %q: %w", object.Name, err)
+		}
+		if err := requireOwned(existing.Labels, "Deployment", object.Name); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("read Deployment %q: %w", object.Name, err)
+	}
+	body, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	force := true
+	_, err = client.Patch(ctx, object.Name, types.ApplyPatchType, body, metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
+	return wrapApply("Deployment", object.Name, err)
+}
+
+func (c *Client) applyNetworkPolicy(ctx context.Context, object *networkingv1.NetworkPolicy) error {
+	name, namespace := object.Name, object.Namespace
+	client := c.api.NetworkingV1().NetworkPolicies(namespace)
+	existing, err := client.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		if err := requireOwned(existing.Labels, "NetworkPolicy", name); err != nil {
+			return err
+		}
+	} else if apierrors.IsNotFound(err) {
+		if _, err := client.Create(ctx, object, metav1.CreateOptions{FieldManager: fieldManager}); err == nil {
+			return nil
+		} else if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create NetworkPolicy %q: %w", name, err)
+		}
+		existing, err = client.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("read concurrently created NetworkPolicy %q: %w", name, err)
+		}
+		if err := requireOwned(existing.Labels, "NetworkPolicy", name); err != nil {
+			return err
+		}
+	} else {
+		return fmt.Errorf("read NetworkPolicy %q: %w", name, err)
+	}
+	body, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	force := true
+	_, err = client.Patch(ctx, name, types.ApplyPatchType, body, metav1.PatchOptions{FieldManager: fieldManager, Force: &force})
+	return wrapApply("NetworkPolicy", name, err)
+}
+
+func requireOwned(labels map[string]string, kind, name string) error {
+	if labels[managedByLabel] != managedByValue {
+		return fmt.Errorf("%s %q is not managed by org", kind, name)
+	}
+	return nil
+}
+
+func wrapApply(kind, name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("apply %s %q: %w", kind, name, err)
+}
+
+func (c *Client) WaitReady(ctx context.Context, deployment domain.WorkerVersion) error {
+	if c.api == nil {
+		return errors.New("Kubernetes API client is required")
+	}
 	timeout := c.cfg.ReadinessTimeout
 	if timeout == 0 {
 		timeout = 2 * time.Minute
 	}
-	_, err := c.runner.Run(ctx, "", "kubectl", append(c.flags(), "-n", c.cfg.Namespace, "rollout", "status", "deployment/"+workloadName(d), "--timeout="+timeout.String())...)
-	return err
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var observedUID types.UID
+	for {
+		live, err := c.api.AppsV1().Deployments(c.cfg.Namespace).Get(waitCtx, workloadName(deployment), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || apierrors.IsTooManyRequests(err) {
+				if err := waitReadinessInterval(waitCtx); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("read Deployment readiness: %w", err)
+		}
+		if live.UID == "" {
+			return errors.New("live Deployment UID is empty")
+		}
+		if observedUID == "" {
+			observedUID = live.UID
+		} else if live.UID != observedUID {
+			return errors.New("Deployment was replaced while waiting for readiness")
+		}
+		ready, failure := deploymentReadiness(live)
+		if failure != nil {
+			return failure
+		}
+		if ready {
+			return nil
+		}
+		if err := waitReadinessInterval(waitCtx); err != nil {
+			return err
+		}
+	}
 }
 
-func (c *Client) flags() []string {
-	out := []string{}
-	if c.cfg.Context != "" {
-		out = append(out, "--context", c.cfg.Context)
+func waitReadinessInterval(ctx context.Context) error {
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	if c.cfg.Kubeconfig != "" {
-		out = append(out, "--kubeconfig", c.cfg.Kubeconfig)
-	}
-	return out
 }
 
-type ExecRunner struct{}
-
-func (ExecRunner) Run(ctx context.Context, stdin, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdin = strings.NewReader(stdin)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+func deploymentReadiness(deployment *appsv1.Deployment) (bool, error) {
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing && condition.Status == corev1.ConditionFalse && condition.Reason == "ProgressDeadlineExceeded" {
+			return false, fmt.Errorf("Deployment rollout failed: %s", condition.Reason)
+		}
+		if condition.Type == appsv1.DeploymentReplicaFailure && condition.Status == corev1.ConditionTrue {
+			return false, fmt.Errorf("Deployment replica failure: %s", condition.Reason)
+		}
 	}
-	return out, nil
+	desired := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desired = *deployment.Spec.Replicas
+	}
+	return deployment.Status.ObservedGeneration >= deployment.Generation &&
+		deployment.Status.UpdatedReplicas >= desired &&
+		deployment.Status.AvailableReplicas >= desired &&
+		deployment.Status.UnavailableReplicas == 0, nil
 }
 
-func RenderManifest(d domain.WorkerVersion, cfg Config) (string, error) {
-	if cfg.Namespace == "" || cfg.WorkerTemporalAddress == "" || cfg.TemporalNamespace == "" {
-		return "", errors.New("kubernetes namespace and Worker Temporal connection are required")
-	}
-	if d.TenantID == "" || d.TenantSlug == "" || d.TenantHash == "" || d.VersionHash == "" || d.KubernetesDeployment == "" || d.KubernetesServiceAccount == "" {
-		return "", errors.New("tenant-qualified canonical Kubernetes identity is required")
-	}
-	name := workloadName(d)
-	var extraEnv strings.Builder
-	for _, env := range d.Runtime.Environment {
-		fmt.Fprintf(&extraEnv, "        - name: %s\n          valueFrom:\n            secretKeyRef:\n              name: %s\n              key: %s\n", env.Name, env.Secret, env.SecretKey)
-	}
-	manifest := fmt.Sprintf(`apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    app.kubernetes.io/managed-by: org
-    org.wu8685.dev/tenant: %s
-    org.wu8685.dev/tenant-hash: %s
-    org.wu8685.dev/worker: %s
-    org.wu8685.dev/version: %s
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    app.kubernetes.io/managed-by: org
-    org.wu8685.dev/tenant: %s
-    org.wu8685.dev/tenant-hash: %s
-    org.wu8685.dev/worker: %s
-    org.wu8685.dev/version: %s
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: %s
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: %s
-        app.kubernetes.io/managed-by: org
-        org.wu8685.dev/tenant: %s
-        org.wu8685.dev/tenant-hash: %s
-        org.wu8685.dev/worker: %s
-        org.wu8685.dev/version: %s
-    spec:
-      serviceAccountName: %s
-      automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-      - name: worker
-        image: %s
-        imagePullPolicy: IfNotPresent
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
-        resources:
-          requests: {cpu: %s, memory: %s}
-          limits: {cpu: %s, memory: %s}
-        volumeMounts:
-        - {name: tmp, mountPath: /tmp}
-        env:
-        - {name: TEMPORAL_ADDRESS, value: %s}
-        - {name: TEMPORAL_NAMESPACE, value: %s}
-        - {name: TEMPORAL_TASK_QUEUE, value: %s}
-        - {name: TEMPORAL_WORKER_DEPLOYMENT, value: %s}
-        - {name: TEMPORAL_WORKER_BUILD_ID, value: %s}
-%s      volumes:
-      - name: tmp
-        emptyDir: {}
-`, d.KubernetesServiceAccount, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, name, name, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, d.KubernetesServiceAccount, d.Image, d.Runtime.CPU, d.Runtime.Memory, d.Runtime.CPU, d.Runtime.Memory, cfg.WorkerTemporalAddress, cfg.TemporalNamespace, d.TaskQueue, d.WorkerDeployment, d.Version, extraEnv.String())
-	if cfg.NetworkPolicyEnabled {
-		manifest += fmt.Sprintf(`---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: %s
-  namespace: %s
-  labels:
-    app.kubernetes.io/managed-by: org
-    org.wu8685.dev/tenant: %s
-    org.wu8685.dev/tenant-hash: %s
-    org.wu8685.dev/worker: %s
-    org.wu8685.dev/version: %s
-spec:
-  podSelector:
-    matchLabels:
-      org.wu8685.dev/tenant-hash: %s
-      org.wu8685.dev/worker: %s
-      org.wu8685.dev/version: %s
-  policyTypes: [Ingress]
-`, d.KubernetesNetworkPolicy, cfg.Namespace, d.TenantSlug, d.TenantHash, d.WorkerName, d.VersionHash, d.TenantHash, d.WorkerName, d.VersionHash)
-	}
-	return manifest, nil
-}
-
-func workloadName(d domain.WorkerVersion) string {
-	if d.KubernetesDeployment != "" {
-		return d.KubernetesDeployment
-	}
-	return ""
+func workloadName(deployment domain.WorkerVersion) string {
+	return deployment.KubernetesDeployment
 }
 
 func NetworkPolicyStatus(cfg Config) string {

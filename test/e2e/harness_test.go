@@ -21,6 +21,7 @@ import (
 	temporalplatform "github.com/wu8685/org/internal/platform/temporal"
 	"github.com/wu8685/org/internal/service"
 	"github.com/wu8685/org/sdk/orgsdk"
+	"k8s.io/client-go/kubernetes"
 )
 
 var digestReferencePattern = regexp.MustCompile(`org\.local/hello-worker@sha256:[0-9a-f]{64}`)
@@ -44,6 +45,7 @@ type acceptanceRun struct {
 	cleanupOnce                         sync.Once
 	bootstrapServer                     *http.Server
 	bootstrapURL                        string
+	kubeAPI                             kubernetes.Interface
 }
 
 func newAcceptanceRun(t *testing.T, ctx context.Context) *acceptanceRun {
@@ -93,7 +95,12 @@ func (r *acceptanceRun) controlPlane() *service.ControlPlane {
 		r.t.Fatalf("dial Temporal: %v", err)
 	}
 	r.temporal = executor
-	cluster := kube.New(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default", ReadinessTimeout: 2 * time.Minute}, nil)
+	kubeAPI, err := kube.NewAPI("kind-org", "")
+	if err != nil {
+		r.t.Fatalf("connect Kubernetes API: %v", err)
+	}
+	r.kubeAPI = kubeAPI
+	cluster := kube.New(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org", WorkerTemporalAddress: "host.docker.internal:7233", TemporalNamespace: "default", ReadinessTimeout: 2 * time.Minute}, kubeAPI)
 	r.store = service.NewMemoryStore()
 	r.tenants = map[string]domain.Tenant{"a": r.tenant("a"), "b": r.tenant("b")}
 	for _, tenant := range r.tenants {
@@ -114,7 +121,7 @@ func (r *acceptanceRun) controlPlane() *service.ControlPlane {
 	if err := r.control.StartInvocationReconciler(r.ctx); err != nil {
 		r.t.Fatalf("start invocation reconciler: %v", err)
 	}
-	r.bootstrapServer = &http.Server{Handler: service.NewBootstrapRegistrationHandler(r.control, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org"}, nil)), ReadHeaderTimeout: 5 * time.Second}
+	r.bootstrapServer = &http.Server{Handler: service.NewBootstrapRegistrationHandler(r.control, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: r.kubeNamespace, Context: "kind-org"}, kubeAPI, nil)), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = r.bootstrapServer.Serve(listener) }()
 	for suffix := range r.tenants {
 		if _, err := r.control.CreateWorker(r.ctx, r.auth(suffix), service.CreateWorkerRequest{WorkerName: r.workerName}); err != nil {

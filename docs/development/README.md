@@ -29,6 +29,8 @@ control plane 通过 `127.0.0.1:7233` 访问 Temporal；kind Pod 在 Docker Desk
 - `kind`
 - Temporal CLI
 
+`kubectl` 是 kind、reset 和 E2E 等开发/运维脚本的前置依赖。`org-console` 长期运行进程通过 Kubernetes API client 访问 cluster，不启动 `kubectl` 子进程。
+
 本地验收环境应提供 `org` kind cluster（`kind-org` context），并在 `127.0.0.1:7233` 提供 Temporal。`make e2e-preflight` 只验证它们的当前状态，不创建或修改资源。
 
 ## 启动依赖

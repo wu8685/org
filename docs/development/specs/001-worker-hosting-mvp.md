@@ -128,7 +128,7 @@ The normal unit-test command remains independent of local infrastructure. The re
 2. Build and kind-load two traceable sample images, version A and version B, and resolve the immutable digest reference used by Kubernetes. This is test-fixture preparation, not a control-plane image-build feature.
 3. Create two explicit Tenant records with finite quota policies and authenticated contexts derived by the harness; neither deployment nor Run DTO contains `tenantId`.
 4. Read the sample's canonical Worker metadata and submit it under each authenticated Tenant's same Worker name with version description, digest, runtime, and source provenance.
-5. Deploy version A through the real `kubectl` adapter; require Kubernetes readiness and an observed Temporal Worker Deployment poller before the deployment can become ready.
+5. Deploy version A through the real Kubernetes API adapter; require Kubernetes readiness and an observed Temporal Worker Deployment poller before the deployment can become ready.
 6. Deploy version B as Current and start an invocation without `workflowVersion`; require successful completion on version B.
 7. Read the `org_projection` state through the normal control-plane projection method and require the declared semantic steps, terminal current step, semantic status, no block reason, and terminal allowed actions. Raw Temporal Event History must not be used to derive this assertion.
 8. Start another invocation with explicit historical version A; require a Temporal Pinned Versioning Override and prove from both the audit record and Workflow result that version A executed while B remained Current.

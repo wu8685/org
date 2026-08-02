@@ -142,7 +142,7 @@ func verifyBootstrapRetryAndRejections(t *testing.T, run *acceptanceRun, version
 	evidenceRequest := httptest.NewRequest(http.MethodPost, "/", nil)
 	evidenceRequest.Header.Set("X-Org-Workload-Token", workloadToken)
 	evidenceRequest.Header.Set("X-Org-Pod-UID", podUID)
-	evidence, err := kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: run.kubeNamespace, Context: "kind-org"}, nil).ResolveBootstrapEvidence(evidenceRequest)
+	evidence, err := kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: run.kubeNamespace, Context: "kind-org"}, run.kubeAPI, nil).ResolveBootstrapEvidence(evidenceRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,10 +48,14 @@ func main() {
 		log.Fatalf("connect local execution service: %v", err)
 	}
 	defer executor.Close()
+	kubeAPI, err := kube.NewAPI(cfg.KubeContext, cfg.Kubeconfig)
+	if err != nil {
+		log.Fatalf("connect Kubernetes API: %v", err)
+	}
 	cluster := kube.New(kube.Config{
 		Namespace: cfg.KubeNamespace, Context: cfg.KubeContext, Kubeconfig: cfg.Kubeconfig,
 		WorkerTemporalAddress: cfg.WorkerTemporalAddress, TemporalNamespace: cfg.TemporalNamespace,
-	}, nil)
+	}, kubeAPI)
 	controlPlane := service.New(service.Config{
 		RegistryAllowlist: cfg.RegistryAllowlist, TemporalWebBaseURL: cfg.TemporalWebBaseURL, TemporalNamespace: cfg.TemporalNamespace,
 		BootstrapEndpoint: cfg.WorkerBootstrapEndpoint, BootstrapVerifier: service.StrictBootstrapWorkloadVerifier{},
@@ -86,7 +90,7 @@ func main() {
 		ControlPlane:  controlPlane,
 	})
 	mux := http.NewServeMux()
-	mux.Handle("/internal/v1/bootstrap/register", service.NewBootstrapRegistrationHandler(controlPlane, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: cfg.KubeNamespace, Context: cfg.KubeContext, Kubeconfig: cfg.Kubeconfig}, nil)))
+	mux.Handle("/internal/v1/bootstrap/register", service.NewBootstrapRegistrationHandler(controlPlane, kube.NewBootstrapEvidenceResolver(kube.Config{Namespace: cfg.KubeNamespace, Context: cfg.KubeContext, Kubeconfig: cfg.Kubeconfig}, kubeAPI, nil)))
 	mux.Handle("/", consoleHandler)
 	handler := http.Handler(mux)
 	server := &http.Server{Addr: cfg.ConsoleAddress, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}

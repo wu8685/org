@@ -13,7 +13,7 @@ Implemented and covered by tests:
 - independent invocation IDs plus optional idempotency-key deduplication;
 - JSON-file audit projection persistence;
 - declared Signal/Query enforcement, cancellation, and semantic invocation projection;
-- constrained plain Kubernetes Deployment and ServiceAccount generation via configurable `kubectl` context;
+- constrained typed Kubernetes Deployment and ServiceAccount generation through the Kubernetes API using configurable kubeconfig/context loading; the long-running control plane does not invoke `kubectl`;
 - configurable host-side and kind-Pod Temporal endpoints;
 - Temporal Go SDK adapter for Worker Deployment Versioning, execution operations, and diagnostics status.
 - first-class Tenant → Worker → WorkerVersion → Workflow Run model with version-level required description, revision/If-Match updates, Tenant-qualified store/audit/projection data, and no public `scope` field;
@@ -53,6 +53,7 @@ Still deferred:
 
 Latest local verification on 2026-08-02:
 
+- Kubernetes runtime access migration passed typed resource, Create/Server-Side Apply ownership, structured API error, readiness retry/cancellation, TokenReview and live Pod/ReplicaSet identity tests; production Kubernetes paths no longer invoke `kubectl`. Root race/vet/docs and all three real kind + Temporal E2E paths passed with the API adapter.
 - root `go test -race ./...` and `go vet ./...` passed;
 - all three independent Sample modules passed `go test -race ./...` and `go vet ./...`;
 - `make sdk-temporal-test` passed real Worker stop/Signal/restart/replay verification;
